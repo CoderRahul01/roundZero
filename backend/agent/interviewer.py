@@ -92,7 +92,7 @@ class InterviewerAgent(Agent):
 
         # Initialize framework components
         # Use Gemini Realtime for low-latency speech-to-speech
-        llm = gemini.Realtime()
+        llm = gemini.Realtime(fps=3)
 
         # Vision Processor
         self.emotion_processor = VisionEmotionProcessor()
@@ -102,8 +102,6 @@ class InterviewerAgent(Agent):
             agent_user=User(name="Interviewer", id="agent"),
             instructions=service.decision_engine.system_prompt,
             llm=llm,
-            stt=deepgram.STT(),
-            tts=elevenlabs.TTS(),
             processors=[self.emotion_processor]
         )
         self.is_processing_decision = False
@@ -116,19 +114,20 @@ class InterviewerAgent(Agent):
         @self.events.subscribe
         async def on_transcript(event: Any):
             """Listen to transcripts to update state and broadcast to UI."""
-            # vision-agents events often have 'text' and 'participant_id' or 'response'
-            # We normalize to handle both speech-to-speech and custom STT events
-            text = getattr(event, "text", "")
-            if not text:
+            # Filter agent's own events to avoid feedback loops
+            user_id = getattr(getattr(getattr(event, "participant", None), "user", None), "id", None)
+            if user_id == self.agent_user.id:
+                self.is_speaking = True
+                text = getattr(event, "text", "")
+                if text:
+                    await self.service.broadcast(self.session_id, {
+                        "type": "agent_transcript",
+                        "text": text
+                    })
                 return
 
-            # Check if it's the agent speaking
-            if getattr(event, "participant_id", None) == self.agent_user.id:
-                self.is_speaking = True
-                await self.service.broadcast(self.session_id, {
-                    "type": "agent_transcript",
-                    "text": text
-                })
+            text = getattr(event, "text", "")
+            if not text:
                 return
             
             self.last_transcript_time = time.time()
@@ -157,12 +156,8 @@ class InterviewerAgent(Agent):
             """Update local video stats when processor emits results."""
             # VLM events use plugin_name to identify the source
             if event.plugin_name == self.emotion_processor.name:
-                # For VLM inference, the result is in the text field
-                # In this mock, we'd need to parse it or have it pre-formatted
-                # For now, let's just log it
                 logger.info(f"👁️ Vision analysis: {event.text}")
                 # Update last_vid_stats and broadcast
-                # In a real scenario, we'd parse event.text
                 await self.service.broadcast(self.session_id, {
                     "type": "vision",
                     "stats": self.last_vid_stats
@@ -187,8 +182,8 @@ class InterviewerAgent(Agent):
 
         await self.service.broadcast(self.session_id, event_data)
         
-        # Use say() to speak the text using the agent's TTS
-        await self.say(text)
+        # Use super().simple_response to speak the text
+        await super().simple_response(text)
         self.is_speaking = False # Reset flag after speaking
 
     async def join_session_call(self, call_id: str, call_type: str = "default"):
@@ -430,8 +425,10 @@ class QuestionBank:
         self._pinecone_index = None
         self._llm_client = None
         self._genai_client = None
+        self._mongo_repo = None
         self._try_enable_gemini()
         self._try_enable_pinecone()
+        self._try_enable_mongodb()
 
     def _load_local_questions(self) -> list[Question]:
         if not QUESTION_STORE_PATH.exists():
@@ -510,6 +507,24 @@ class QuestionBank:
         except Exception:
             self._llm_client = None
 
+    def _try_enable_mongodb(self) -> None:
+        """Initialize MongoDB connection if URI is configured."""
+        mongodb_uri = settings.mongodb_uri
+        if not mongodb_uri:
+            logger.info("MongoDB URI not configured, using local questions only")
+            return
+        
+        try:
+            from data.mongo_repository import MongoQuestionRepository
+            self._mongo_repo = MongoQuestionRepository(
+                connection_uri=mongodb_uri,
+                database_name="RoundZero"
+            )
+            logger.info("MongoDB repository initialized successfully")
+        except Exception as e:
+            logger.warning(f"Failed to initialize MongoDB repository: {e}")
+            self._mongo_repo = None
+
     async def upsert_session_vector(
         self,
         user_id: str,
@@ -574,15 +589,25 @@ class QuestionBank:
     async def fetch_questions(
         self, role: str, topics: list[str], difficulty: str, n: int = 8
     ) -> list[Question]:
+        # Priority 1: Try MongoDB first
+        if self._mongo_repo is not None:
+            mongo_questions = await self._fetch_from_mongodb(role, topics, difficulty, n)
+            if mongo_questions:
+                logger.info(f"Fetched {len(mongo_questions)} questions from MongoDB")
+                return mongo_questions
+        
+        # Priority 2: Try dynamic generation with Gemini
         generated = await self._generate_dynamic_questions(role, topics, difficulty, n)
         if generated:
             return generated
 
+        # Priority 3: Try Pinecone vector search
         if self._pinecone_index is not None and self._genai_client is not None:
             remote = await self._fetch_from_pinecone(role, topics, difficulty, n)
             if remote:
                 return remote
 
+        # Priority 4: Fallback to local questions
         return self._fetch_from_local(role, topics, difficulty, n)
 
     async def _generate_dynamic_questions(
@@ -721,6 +746,68 @@ class QuestionBank:
         except Exception:
             return []
 
+    async def _fetch_from_mongodb(
+        self, role: str, topics: list[str], difficulty: str, n: int
+    ) -> list[Question]:
+        """
+        Fetch questions from MongoDB based on role, topics, and difficulty.
+        Uses topic matching if topics are provided, otherwise uses category matching.
+        """
+        try:
+            # If topics are provided, search by topics
+            if topics:
+                mongo_questions = await self._mongo_repo.get_questions_by_topics(
+                    topics=topics,
+                    difficulty=difficulty,
+                    limit=n
+                )
+                if mongo_questions:
+                    return mongo_questions
+            
+            # Fallback: Try to map role to category
+            category_map = {
+                "software": "software",
+                "backend": "software",
+                "frontend": "software",
+                "fullstack": "software",
+                "data": "software",
+                "ml": "software",
+                "devops": "software",
+                "hr": "hr",
+                "behavioral": "hr",
+                "leetcode": "leetcode",
+                "coding": "leetcode",
+                "algorithm": "leetcode",
+            }
+            
+            role_lower = role.lower()
+            category = None
+            for key, value in category_map.items():
+                if key in role_lower:
+                    category = value
+                    break
+            
+            # If we found a category, fetch by category
+            if category:
+                mongo_questions = await self._mongo_repo.get_questions_by_category(
+                    category=category,
+                    difficulty=difficulty,
+                    limit=n
+                )
+                if mongo_questions:
+                    return mongo_questions
+            
+            # Final fallback: Get any questions from software category
+            mongo_questions = await self._mongo_repo.get_all(
+                category="software",
+                limit=n
+            )
+            return mongo_questions
+            
+        except Exception as e:
+            logger.warning(f"Error fetching from MongoDB: {e}")
+            return []
+
     def _fetch_from_local(
         self, role: str, topics: list[str], difficulty: str, n: int
     ) -> list[Question]:
@@ -816,6 +903,7 @@ class MemoryProvider:
 class DecisionEngine:
     def __init__(self) -> None:
         self._llm = None
+        self._free_engine = None
         self.system_prompt = (
             "You are an expert technical interview coach. Your goal is to guide candidates "
             "through a mock interview. Evaluate their responses based on technical depth, "
@@ -832,25 +920,57 @@ class DecisionEngine:
         ideal_answer: str = "",
     ) -> tuple[Action, str, int | None]:
         # Lazy initialization to avoid "no running event loop" at module load
-        if self._llm is None:
-            key = settings.anthropic_api_key
-            use_claude = settings.use_claude_decision
-            if ClaudeLLM and key and use_claude:
+        if self._llm is None and self._free_engine is None:
+            # Try Groq first (free tier)
+            groq_key = settings.groq_api_key
+            use_groq = settings.use_groq_decision
+            if groq_key and use_groq:
                 try:
-                    model = settings.claude_model
-                    logger.info(f"DecisionEngine: Initializing ClaudeLLM with model {model}")
-                    self._llm = ClaudeLLM(model=model, api_key=key)
-                    logger.info("DecisionEngine: ClaudeLLM initialized successfully")
+                    from agent.free_decision_engine import FreeDecisionEngine
+                    self._free_engine = FreeDecisionEngine(groq_api_key=groq_key)
+                    logger.info("DecisionEngine: Using FreeDecisionEngine (Groq - zero cost)")
                 except Exception as e:
-                    logger.error(f"DecisionEngine: Failed to initialize ClaudeLLM: {e}")
-                    self._llm = None
-            else:
-                logger.info("DecisionEngine: Claude disabled or missing (heuristics mode)")
+                    logger.error(f"DecisionEngine: Failed to initialize FreeDecisionEngine: {e}")
+                    self._free_engine = None
+            
+            # Fallback to Claude if Groq not available
+            if self._free_engine is None:
+                key = settings.anthropic_api_key
+                use_claude = settings.use_claude_decision
+                if ClaudeLLM and key and use_claude:
+                    try:
+                        model = settings.claude_model
+                        logger.info(f"DecisionEngine: Initializing ClaudeLLM with model {model}")
+                        self._llm = ClaudeLLM(model=model, api_key=key)
+                        logger.info("DecisionEngine: ClaudeLLM initialized successfully")
+                    except Exception as e:
+                        logger.error(f"DecisionEngine: Failed to initialize ClaudeLLM: {e}")
+                        self._llm = None
+                else:
+                    logger.info("DecisionEngine: No LLM configured, using heuristics mode")
 
+        # Try free engine first
+        if self._free_engine:
+            try:
+                result = await self._free_engine.evaluate_answer(
+                    question=question,
+                    answer=answer,
+                    confidence=confidence,
+                    fillers=fillers,
+                    mode=mode,
+                    ideal_answer=ideal_answer
+                )
+                return result.action, result.message, result.score
+            except Exception as e:
+                logger.error(f"FreeDecisionEngine failed: {e}, falling back to heuristics")
+        
+        # Fallback to Claude
         if self._llm:
             llm_result = await self._decide_with_llm(question, answer, confidence, fillers, mode, ideal_answer)
             if llm_result is not None:
                 return llm_result
+        
+        # Final fallback to heuristics
         action, message = self._decide_with_heuristics(answer, confidence, fillers, mode)
         return action, message, None
 

@@ -52,11 +52,14 @@ class Settings(BaseSettings):
     stream_api_secret: str | None = None
     anthropic_api_key: str | None = None
     gemini_api_key: str | None = None
+    groq_api_key: str | None = None
     supermemory_api_key: str | None = None
+    mongodb_uri: str | None = None
 
     # Feature flags
     use_pinecone: bool = False
     use_claude_decision: bool = False
+    use_groq_decision: bool = True  # Free tier default
     use_supermemory: bool = False
     use_vision: bool = False
     claude_model: str = "claude-3-5-sonnet-latest"
