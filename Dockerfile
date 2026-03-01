@@ -20,8 +20,8 @@ RUN apt-get update && apt-get install -y \
     make \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv
-RUN pip install uv
+# Install uv and Cython (required for PyAV)
+RUN pip install uv cython
 
 # Copy backend dependency files
 COPY backend/pyproject.toml ./
