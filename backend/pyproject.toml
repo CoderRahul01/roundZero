@@ -24,6 +24,11 @@ dependencies = [
     "elevenlabs>=1.50.0",
     "pinecone>=6.0.1",
     "supermemory>=1.0.14",
+    "numpy>=1.26.0",
+    "opencv-python-headless>=4.10.0",
+    "aiortc>=1.9.0",
+    "av>=12.0.0",
+    "aiolimiter>=1.1.0",
 ]
 
 [project.optional-dependencies]
