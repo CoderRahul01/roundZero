@@ -30,14 +30,15 @@ def validate_environment() -> Tuple[bool, Dict[str, List[str]]]:
     Raises:
         EnvironmentValidationError: If critical environment variables are missing
     """
-    # Core required variables
+    # Check if Vision Agents is enabled
+    use_vision = os.getenv("USE_VISION", "false").lower() in ("true", "1", "yes")
+    
+    # Core required variables (always required)
     core_required = [
-        "DATABASE_URL",
-        "MONGODB_URI",
         "JWT_SECRET",
     ]
     
-    # Vision Agents required variables
+    # Vision Agents required variables (only if USE_VISION=true)
     vision_required = [
         "STREAM_APP_ID",
         "STREAM_API_KEY",
@@ -45,13 +46,15 @@ def validate_environment() -> Tuple[bool, Dict[str, List[str]]]:
         "GEMINI_API_KEY",
         "DEEPGRAM_API_KEY",
         "ELEVENLABS_API_KEY",
-    ]
+    ] if use_vision else []
     
     # At least one decision engine required
-    decision_engines = ["ANTHROPIC_API_KEY", "GROQ_API_KEY"]
+    decision_engines = ["ANTHROPIC_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY"]
     
     # Optional but recommended variables
     optional_vars = [
+        "DATABASE_URL",
+        "MONGODB_URI",
         "PINECONE_API_KEY",
         "SUPERMEMORY_API_KEY",
         "UPSTASH_REDIS_REST_URL",
@@ -61,8 +64,8 @@ def validate_environment() -> Tuple[bool, Dict[str, List[str]]]:
     # Check core required variables
     missing_core = [var for var in core_required if not os.getenv(var)]
     
-    # Check Vision Agents required variables
-    missing_vision = [var for var in vision_required if not os.getenv(var)]
+    # Check Vision Agents required variables (only if enabled)
+    missing_vision = [var for var in vision_required if not os.getenv(var)] if use_vision else []
     
     # Check decision engine (at least one required)
     has_decision_engine = any(os.getenv(var) for var in decision_engines)
