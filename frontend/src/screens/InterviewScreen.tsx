@@ -177,6 +177,7 @@ export function InterviewScreen({
   const [livePartial, setLivePartial] = useState("");
   const [micError, setMicError] = useState<string | null>(null);
   const [recognitionReady, setRecognitionReady] = useState(false);
+  const [audioPermissionGranted, setAudioPermissionGranted] = useState(false);
   const recognitionRef = useRef<InstanceType<RecognitionCtor> | null>(null);
   const shouldListenRef = useRef(false);
   const autoMicStartedRef = useRef(false);
@@ -290,14 +291,38 @@ export function InterviewScreen({
             
             // DEMO FIX: Speak the transcript using browser TTS
             if (streamEnabled && typeof window !== "undefined" && "speechSynthesis" in window) {
-              window.speechSynthesis.cancel();
-              const utterance = new SpeechSynthesisUtterance(data.text);
-              utterance.rate = 1.0;
-              utterance.pitch = 1.0;
-              utterance.onstart = () => setIsAiSpeaking(true);
-              utterance.onend = () => setIsAiSpeaking(false);
-              utterance.onerror = () => setIsAiSpeaking(false);
-              window.speechSynthesis.speak(utterance);
+              try {
+                console.log("🎤 TTS attempting to speak:", data.text.substring(0, 50));
+                window.speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(data.text);
+                utterance.rate = 1.0;
+                utterance.pitch = 1.0;
+                
+                utterance.onstart = () => {
+                  console.log("🔊 TTS started:", data.text.substring(0, 50));
+                  setIsAiSpeaking(true);
+                };
+                
+                utterance.onend = () => {
+                  console.log("✅ TTS completed");
+                  setIsAiSpeaking(false);
+                };
+                
+                utterance.onerror = (event) => {
+                  console.error("❌ TTS error:", event.error, event);
+                  setIsAiSpeaking(false);
+                  setError(`Voice playback failed: ${event.error}. Please check browser permissions.`);
+                };
+                
+                window.speechSynthesis.speak(utterance);
+                console.log("🎤 TTS speak() called successfully");
+              } catch (error) {
+                console.error("❌ TTS exception:", error);
+                setError("Voice playback failed. Please enable audio in your browser.");
+                setIsAiSpeaking(false);
+              }
+            } else {
+              console.warn("⚠️ TTS not available: streamEnabled=", streamEnabled, "speechSynthesis=", typeof window !== "undefined" && "speechSynthesis" in window);
             }
           }
         });
@@ -313,14 +338,38 @@ export function InterviewScreen({
             
             // DEMO FIX: Speak the message using browser TTS
             if (streamEnabled && typeof window !== "undefined" && "speechSynthesis" in window) {
-              window.speechSynthesis.cancel();
-              const utterance = new SpeechSynthesisUtterance(data.text);
-              utterance.rate = 1.0;
-              utterance.pitch = 1.0;
-              utterance.onstart = () => setIsAiSpeaking(true);
-              utterance.onend = () => setIsAiSpeaking(false);
-              utterance.onerror = () => setIsAiSpeaking(false);
-              window.speechSynthesis.speak(utterance);
+              try {
+                console.log("🎤 TTS attempting to speak:", data.text.substring(0, 50));
+                window.speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(data.text);
+                utterance.rate = 1.0;
+                utterance.pitch = 1.0;
+                
+                utterance.onstart = () => {
+                  console.log("🔊 TTS started:", data.text.substring(0, 50));
+                  setIsAiSpeaking(true);
+                };
+                
+                utterance.onend = () => {
+                  console.log("✅ TTS completed");
+                  setIsAiSpeaking(false);
+                };
+                
+                utterance.onerror = (event) => {
+                  console.error("❌ TTS error:", event.error, event);
+                  setIsAiSpeaking(false);
+                  setError(`Voice playback failed: ${event.error}. Please check browser permissions.`);
+                };
+                
+                window.speechSynthesis.speak(utterance);
+                console.log("🎤 TTS speak() called successfully");
+              } catch (error) {
+                console.error("❌ TTS exception:", error);
+                setError("Voice playback failed. Please enable audio in your browser.");
+                setIsAiSpeaking(false);
+              }
+            } else {
+              console.warn("⚠️ TTS not available: streamEnabled=", streamEnabled, "speechSynthesis=", typeof window !== "undefined" && "speechSynthesis" in window);
             }
             
             // Sync question state if the agent is asking a new question
@@ -359,7 +408,16 @@ export function InterviewScreen({
 
         es.addEventListener("interview_complete", (e: any) => {
           if (!mounted) return;
-          console.log("SSE [interview_complete]:", e.data);
+          const data = JSON.parse(e.data);
+          console.log("SSE [interview_complete]:", data);
+          
+          // Display scorecard if available
+          if (data.scorecard) {
+            console.log("Final Scorecard:", data.scorecard);
+            // Store scorecard for display (you can add state for this)
+            // For now, just log it and end the session
+          }
+          
           onEnd();
         });
 

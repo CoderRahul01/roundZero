@@ -1,0 +1,159 @@
+# Implementation Plan
+
+- [ ] 1. Write bug condition exploration test
+  - **Property 1: Fault Condition** - Voice Inaudibility, Progression Failure, Question Mismatch
+  - **CRITICAL**: This test MUST FAIL on unfixed code - failure confirms the bugs exist
+  - **DO NOT attempt to fix the test or the code when it fails**
+  - **NOTE**: This test encodes the expected behavior - it will validate the fix when it passes after implementation
+  - **GOAL**: Surface counterexamples that demonstrate the three bugs exist
+  - **Scoped PBT Approach**: Test concrete failing cases: (1) AI message with no audio output, (2) user silence >10s with no progression, (3) questions not matching selected role/topics
+  - Test implementation details from Fault Condition in design:
+    - Voice bug: Backend generates TTS and broadcasts `agent_message` SSE event, but frontend plays no audible output
+    - Progression bug: User finishes speaking, 10+ seconds of silence, but `advance_question` never called
+    - Question bug: User selects role="Backend Engineer" topics=["Python"], but receives frontend/generic questions
+  - The test assertions should match the Expected Behavior Properties from design:
+    - Property 1: AI voice SHALL be audible through Stream.io or browser TTS with error handling
+    - Property 2: System SHALL call `advance_question` within 2-3 seconds of turn completion
+    - Property 3: Generated questions SHALL match user-selected role and topics
+  - Run test on UNFIXED code
+  - **EXPECTED OUTCOME**: Test FAILS (this is correct - it proves the bugs exist)
+  - Document counterexamples found:
+    - Browser console shows TTS called but no audio, no error logged
+    - Backend logs show user transcript but no "advance_question called" after 15+ seconds
+    - Questions include React/frontend content when Backend/Python selected
+  - Mark task complete when test is written, run, and failures are documented
+  - _Requirements: 1.1, 1.2, 1.3_
+
+- [ ] 2. Write preservation property tests (BEFORE implementing fix)
+  - **Property 2: Preservation** - Existing Functionality Unchanged
+  - **IMPORTANT**: Follow observation-first methodology
+  - Observe behavior on UNFIXED code for non-buggy inputs:
+    - Manual text mode submission via REST API works
+    - Speech transcription and `answer_buffer` accumulation works
+    - SSE events broadcast correctly (all types: transcript, vision, etc.)
+    - Stream.io WebRTC connection establishes successfully
+    - Session state management and database operations work
+  - Write property-based tests capturing observed behavior patterns from Preservation Requirements:
+    - For all manual submissions (not voice), question advances exactly as before
+    - For all transcription events, text appears in UI and accumulates in buffer
+    - For all SSE event types, events broadcast and are received correctly
+    - For all WebRTC operations, connection and audio tracks work as before
+    - For all session operations, state management works exactly as before
+  - Property-based testing generates many test cases for stronger guarantees
+  - Run tests on UNFIXED code
+  - **EXPECTED OUTCOME**: Tests PASS (this confirms baseline behavior to preserve)
+  - Mark task complete when tests are written, run, and passing on unfixed code
+  - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5_
+
+- [-] 3. Fix for voice inaudibility, progression failure, and question mismatch bugs
+
+  - [x] 3.1 Add turn detection configuration to Gemini Realtime
+    - Modify `InterviewerAgent.__init__()` in `backend/agent/interviewer.py` (line 162)
+    - Add explicit turn detection config: `turn_detection={"type": "server_vad", "threshold": 0.5}`
+    - Add turn detection event logging to verify Gemini detects end-of-turn
+    - Subscribe to `TurnCompleteEvent` and broadcast to frontend via SSE
+    - Add logging: "🎤 Turn complete detected for user"
+    - _Bug_Condition: isBugCondition(input) where input.type == "user_speech_end" AND input.silence_duration > 10_seconds AND input.advance_question_called == false_
+    - _Expected_Behavior: System SHALL call advance_question within 2-3 seconds of turn completion (Property 2 from design)_
+    - _Preservation: Transcription and SSE broadcasting must remain unchanged (Requirements 3.2, 3.3)_
+    - _Requirements: 2.2, 2.4_
+
+  - [x] 3.2 Enhance system prompt for explicit progression instruction
+    - Update `_build_interviewer_instructions()` in `backend/agent/interviewer.py`
+    - Add instruction: "IMPORTANT: After the candidate finishes answering, immediately call advance_question(score, feedback) to progress to the next question. Do not wait for additional input."
+    - Add function call logging inside `advance_question` function (line 174)
+    - Log: "🔄 advance_question called: score={score}, feedback={feedback[:50]}..."
+    - _Bug_Condition: Same as 3.1 - progression failure_
+    - _Expected_Behavior: Gemini SHALL understand to call advance_question immediately after evaluating answer_
+    - _Preservation: Existing system prompt structure and other instructions must remain unchanged_
+    - _Requirements: 2.2, 2.4_
+
+  - [x] 3.3 Add comprehensive browser TTS error handling
+    - Modify SSE event listener for `agent_message` in `frontend/src/screens/InterviewScreen.tsx`
+    - Add state for audio permission: `const [audioPermissionGranted, setAudioPermissionGranted] = useState(false)`
+    - Implement `requestAudioPermission()` function to handle autoplay policy
+    - Wrap `speechSynthesis.speak()` in try-catch with comprehensive error logging
+    - Add `utterance.onstart`, `utterance.onend`, `utterance.onerror` handlers with console logging
+    - Log: "🔊 TTS started", "✅ TTS completed", "❌ TTS error: {error}"
+    - Show user error message if TTS fails: "Voice playback failed. Please enable audio in your browser."
+    - _Bug_Condition: isBugCondition(input) where input.type == "agent_message" AND input.backend_audio_generated == true AND input.frontend_audio_played == false_
+    - _Expected_Behavior: Frontend SHALL play audible voice or show error message with proper user notification (Property 1 from design)_
+    - _Preservation: SSE event handling for other event types must remain unchanged (Requirement 3.3)_
+    - _Requirements: 2.1, 2.3_
+
+  - [x] 3.4 Add user interaction trigger for audio permission
+    - Add "Start Interview" button in `frontend/src/screens/InterviewScreen.tsx`
+    - Button calls `requestAudioPermission()` before starting interview
+    - Add visual feedback: "⚠️ Audio permission required. Click 'Start Interview' to enable voice."
+    - Show audio status indicator to user (permission granted/denied)
+    - _Bug_Condition: Same as 3.3 - voice inaudibility due to autoplay policy_
+    - _Expected_Behavior: User interaction SHALL grant audio permission before interview starts_
+    - _Preservation: Existing interview start flow must remain functional_
+    - _Requirements: 2.1, 2.3_
+
+  - [x] 3.5 Fix question generation to use role and topics
+    - Modify `_generate_dynamic_questions()` in `backend/agent/interviewer.py` (line 662)
+    - Update Gemini prompt to include: "Generate {count} technical interview questions for a {config.role} position. Focus on these topics: {', '.join(config.topics)}."
+    - Add requirements: "Questions MUST be specific to {config.role} role" and "Questions MUST cover the topics: {', '.join(config.topics)}"
+    - Add generation logging: "🎯 Generating {count} questions for role={config.role}, topics={config.topics}"
+    - Log generated questions: "✅ Generated {len(questions)} questions: {[q.question[:50] for q in questions]}"
+    - _Bug_Condition: isBugCondition(input) where input.type == "question_generated" AND input.question_topics NOT IN input.user_selected_topics_
+    - _Expected_Behavior: Generated questions SHALL match user-selected role and topics (Property 3 from design)_
+    - _Preservation: Question generation structure and fallback logic must remain unchanged_
+    - _Requirements: 2.5_
+
+  - [x] 3.6 Add role/topic filtering to question fallbacks
+    - Add MongoDB fallback filtering in `_generate_dynamic_questions()`
+    - Filter query: `{"role": config.role, "topics": {"$in": config.topics}}`
+    - Add Pinecone fallback filtering with role/topic metadata
+    - Add fallback logging: "⚠️ Dynamic generation failed, falling back to MongoDB for role={config.role}"
+    - Log which source provided questions (dynamic/MongoDB/Pinecone)
+    - _Bug_Condition: Same as 3.5 - question mismatch when fallback is used_
+    - _Expected_Behavior: Fallback questions SHALL also match role and topics_
+    - _Preservation: Fallback mechanism structure must remain unchanged_
+    - _Requirements: 2.5_
+
+  - [x] 3.7 Add silence detection and turn timeout monitoring
+    - Add `last_transcript_time` tracking in `InterviewerAgent` class
+    - Modify `on_transcript` event handler to log silence duration
+    - Log: "🔇 Silence detected: {silence_duration:.1f}s since last transcript" when >5 seconds
+    - Implement `check_turn_timeout()` async function to monitor stuck turns
+    - Log warning if 15+ seconds silence with answer buffer: "⚠️ Possible stuck turn: {silence_duration:.1f}s silence with answer buffer: {sess.answer_buffer[:100]}"
+    - _Bug_Condition: Helps debug progression bug by surfacing when turn detection fails_
+    - _Expected_Behavior: System SHALL log warnings for stuck turns to aid debugging_
+    - _Preservation: Existing transcript handling must remain unchanged_
+    - _Requirements: 2.2, 2.4_
+
+  - [ ] 3.8 Verify bug condition exploration test now passes
+    - **Property 1: Expected Behavior** - Voice Audibility, Auto-Progression, Question Relevance
+    - **IMPORTANT**: Re-run the SAME test from task 1 - do NOT write a new test
+    - The test from task 1 encodes the expected behavior
+    - When this test passes, it confirms the expected behavior is satisfied:
+      - AI voice is audible or error message shown to user
+      - `advance_question` called within 2-3 seconds of turn completion
+      - Generated questions match user-selected role and topics
+    - Run bug condition exploration test from step 1
+    - **EXPECTED OUTCOME**: Test PASSES (confirms bugs are fixed)
+    - Verify in browser: Start interview, hear AI voice, answer question, see auto-advance within 3 seconds
+    - Verify in logs: "Turn complete detected", "advance_question called", "Generating questions for role=X"
+    - _Requirements: Expected Behavior Properties 1, 2, 3 from design_
+
+  - [ ] 3.9 Verify preservation tests still pass
+    - **Property 2: Preservation** - Existing Functionality Unchanged
+    - **IMPORTANT**: Re-run the SAME tests from task 2 - do NOT write new tests
+    - Run preservation property tests from step 2
+    - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions)
+    - Verify manual text mode submission still works
+    - Verify speech transcription and SSE events unchanged
+    - Verify Stream.io WebRTC connection still works
+    - Verify session state management unchanged
+    - Confirm all tests still pass after fix (no regressions)
+
+- [ ] 4. Checkpoint - Ensure all tests pass and demo is ready
+  - Run full test suite: exploration tests + preservation tests + integration tests
+  - Verify all tests pass
+  - Test in browser with fresh session (refresh to start new interview)
+  - Verify: AI voice audible, questions match role/topics, auto-advance after user answers
+  - Verify: Manual submission works, transcription works, WebRTC works
+  - Ask user to test demo and report any issues
+  - If issues arise, add logging and debug before proceeding

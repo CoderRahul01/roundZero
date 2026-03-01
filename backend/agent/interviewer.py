@@ -99,33 +99,47 @@ def _build_interviewer_instructions(config: SessionConfig, questions: list, mode
             "Use phrases like 'Great start!', 'Nice thinking!', 'That's a solid approach!'.\n"
         )
 
-    return f"""You are an AI technical interviewer. Be FAST and CONCISE.
+    return f"""You are an AI technical interviewer using Gemini Realtime. Be FAST and DECISIVE.
 
-RULES:
+CRITICAL RULES:
 1. You ONLY ask questions. NEVER answer them.
-2. After candidate answers: Give 1 sentence feedback, then call advance_question(score, feedback).
-3. Keep responses under 15 words unless giving feedback.
-4. If candidate asks for answer: "I'm here to evaluate, not provide answers."
-5. If silent 10+ seconds: "Take your time."
-6. When all done: call end_interview.
+2. When candidate finishes speaking (you'll know from turn detection):
+   - Give brief 1-sentence feedback
+   - IMMEDIATELY call advance_question(score, feedback) with score 0-100
+   - The tool will return the next question - speak it immediately
+3. Keep ALL responses under 20 words except the question itself.
+4. If candidate asks for answer: "I evaluate, not provide answers."
+5. When all 8 questions done: call end_interview(summary).
 
 SETUP:
 - Role: {config.role}
 - Topics: {', '.join(config.topics)}
 - Difficulty: {config.difficulty}
+- Total Questions: 8
 
 {tone_block}
-QUESTIONS (ask in order):
+QUESTIONS (ask in exact order):
 {question_list}
-FLOW:
-1. Greet briefly + ask Question 1
-2. Listen to answer
-3. Give 1 sentence feedback
-4. Call advance_question(score, feedback)
-5. Ask next question from tool response
-6. Repeat until done
 
-START: Greet and ask Question 1 NOW."""
+FLOW (FOLLOW EXACTLY):
+1. Greet: "Hi! I'm your AI interviewer for {config.role}. Let's begin."
+2. Ask Question 1
+3. WAIT for candidate to finish (turn detection handles this)
+4. Give feedback: "Good answer." or "Nice thinking."
+5. IMMEDIATELY call advance_question(score, feedback) - DO NOT WAIT
+6. Speak the next question returned by the tool
+7. Repeat steps 3-6 for all 8 questions
+8. After Question 8: Call end_interview("Interview complete! Great job.")
+
+IMPORTANT: After the candidate finishes answering, immediately call advance_question(score, feedback) to progress to the next question. Do not wait for additional input.
+
+SCORING (be generous, this is practice):
+- 80-100: Good answer, shows understanding
+- 60-79: Acceptable, some gaps
+- 40-59: Weak, needs improvement
+- 0-39: Poor, off-topic
+
+START NOW: Greet and ask Question 1."""
 
 
 class InterviewerAgent(Agent):
@@ -159,7 +173,8 @@ class InterviewerAgent(Agent):
 
         # Initialize framework components
         # Use fastest available Gemini model for real-time performance
-        llm = gemini.LLM("gemini-2.5-flash")  # Fast and stable
+        # Turn detection is built-in for Gemini Realtime API (no separate config needed)
+        llm = gemini.LLM("gemini-2.5-flash")
         stt = deepgram.STT()
         tts = elevenlabs.TTS()
 
@@ -176,6 +191,7 @@ class InterviewerAgent(Agent):
         )
         async def advance_question(score: int, feedback: str) -> str:
             """Advance to the next question. Score is 0-100."""
+            logger.info(f"🔄 advance_question called: score={score}, feedback={feedback[:50] if feedback else 'N/A'}...")
             sess = agent_ref.service.sessions.get(agent_ref.session_id)
             if not sess or sess.completed:
                 return "Interview is already completed."
@@ -241,11 +257,11 @@ class InterviewerAgent(Agent):
         @llm.register_function(
             description=(
                 "Call this when all interview questions have been asked and answered "
-                "to finalize the session and generate the report."
+                "to finalize the session and generate the comprehensive scorecard."
             )
         )
         async def end_interview(summary: str) -> str:
-            """End the interview session."""
+            """End the interview session and generate final scorecard."""
             sess = agent_ref.service.sessions.get(agent_ref.session_id)
             if not sess:
                 return "Session not found."
@@ -254,14 +270,36 @@ class InterviewerAgent(Agent):
             
             await agent_ref.service._finalize_session(sess)
             
-            # Broadcast completion to frontend
+            # Generate comprehensive scorecard
+            scores = [r.score for r in sess.question_results]
+            overall_score = round(sum(scores) / len(scores)) if scores else 0
+            
+            scorecard = {
+                "overall_score": overall_score,
+                "questions_answered": len(sess.question_results),
+                "total_questions": len(sess.questions),
+                "breakdown": [
+                    {
+                        "question": r.question_text,
+                        "score": r.score,
+                        "feedback": r.feedback,
+                        "confidence": r.confidence,
+                        "emotion": r.emotion,
+                        "fillers": r.fillers
+                    }
+                    for r in sess.question_results
+                ],
+                "summary": summary
+            }
+            
+            # Broadcast completion with scorecard to frontend
             await agent_ref.service.broadcast(agent_ref.session_id, {
                 "type": "interview_complete",
                 "session_id": agent_ref.session_id,
-                "summary": summary,
+                "scorecard": scorecard,
             })
             
-            return "Interview completed successfully. The candidate's report is now available."
+            return f"Interview completed! Overall score: {overall_score}/100. Report generated with {len(sess.question_results)} questions answered."
 
         # Vision Processor
         self.emotion_processor = VisionEmotionProcessor()
@@ -373,13 +411,126 @@ class InterviewerAgent(Agent):
                 greeting = f"Hi there! I'm your AI interviewer for the {sess.config.role} role. Let's get started. Your first question is: {first_q}"
                 await self.simple_response(greeting)
 
+            # Start silence monitoring task to auto-advance questions
+            silence_task = asyncio.create_task(self._monitor_silence())
+
             # Keep the agent alive and listening as long as the session isn't completed
             while sess and not sess.completed:
                 await asyncio.sleep(1.0)
                 sess = self.service.sessions.get(self.session_id)
 
+            # Cancel silence monitoring when session completes
+            silence_task.cancel()
+            try:
+                await silence_task
+            except asyncio.CancelledError:
+                pass
+
             await self.finish()
             print(f"[INFO] Agent {self.agent_user.id} finished call {call.id}")
+
+    async def _monitor_silence(self):
+        """Monitor for silence and auto-advance questions after user stops speaking."""
+        SILENCE_THRESHOLD = 3.0  # seconds of silence before advancing
+        
+        while True:
+            try:
+                await asyncio.sleep(0.5)  # Check every 500ms
+                
+                sess = self.service.sessions.get(self.session_id)
+                if not sess or sess.completed:
+                    break
+                
+                # Check if user has stopped speaking for SILENCE_THRESHOLD seconds
+                time_since_last_transcript = time.time() - self.last_transcript_time
+                
+                # Only auto-advance if:
+                # 1. User has spoken (answer_buffer not empty)
+                # 2. Silence threshold reached
+                # 3. AI is not currently speaking
+                # 4. There's content to evaluate
+                if (sess.answer_buffer.strip() and 
+                    time_since_last_transcript >= SILENCE_THRESHOLD and 
+                    not self.is_speaking and
+                    len(sess.answer_buffer.strip()) > 10):  # At least some meaningful content
+                    
+                    logger.info(f"🔕 Silence detected ({time_since_last_transcript:.1f}s) - auto-advancing question")
+                    
+                    # Auto-advance by calling the function directly
+                    current_q = sess.questions[sess.current_q_idx]
+                    
+                    # Analyze the answer
+                    fillers = self.service.speech.analyze(sess.answer_buffer)
+                    emotion = self.service.emotion.infer_emotion(sess.answer_buffer)
+                    confidence = self.service.emotion.infer_confidence(
+                        sess.answer_buffer, filler_count=fillers
+                    )
+                    
+                    # Simple scoring based on answer length and quality
+                    word_count = len(sess.answer_buffer.split())
+                    base_score = min(85, 50 + word_count)  # 50-85 based on length
+                    score = max(40, base_score - (fillers * 5))  # Deduct for fillers
+                    
+                    feedback = "Good answer. Let's move to the next question."
+                    
+                    # Save the question result
+                    result = QuestionResult(
+                        question_id=current_q.id,
+                        question_text=current_q.question,
+                        user_answer=sess.answer_buffer.strip(),
+                        score=score,
+                        confidence=confidence,
+                        emotion=emotion,
+                        fillers=fillers,
+                        feedback=feedback,
+                        created_at=time.time(),
+                    )
+                    sess.question_results.append(result)
+                    await self.service.db.insert_question_result(sess.id, result)
+                    
+                    # Broadcast scoring
+                    await self.service.broadcast(self.session_id, {
+                        "type": "question_scored",
+                        "question_index": sess.current_q_idx + 1,
+                        "score": score,
+                        "feedback": feedback,
+                        "stats": {
+                            "fillers": sess.total_fillers,
+                            "confidence": confidence,
+                            "emotion": emotion,
+                        },
+                    })
+                    
+                    # Clear buffer and advance
+                    sess.answer_buffer = ""
+                    sess.current_q_idx += 1
+                    self.last_transcript_time = time.time()  # Reset timer
+                    
+                    if sess.current_q_idx >= len(sess.questions):
+                        # All questions done
+                        await self.service._finalize_session(sess)
+                        await self.simple_response("Great job! We've completed all questions. Let me generate your scorecard.")
+                        break
+                    else:
+                        # Move to next question
+                        next_q = sess.questions[sess.current_q_idx]
+                        
+                        # Broadcast new question
+                        await self.service.broadcast(self.session_id, {
+                            "type": "next_question",
+                            "question": next_q.question,
+                            "question_index": sess.current_q_idx + 1,
+                            "total_questions": len(sess.questions),
+                        })
+                        
+                        # Speak the next question
+                        await self.simple_response(f"Next question: {next_q.question}")
+                        
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in silence monitoring: {e}")
+                await asyncio.sleep(1.0)
 
 
 QUESTION_STORE_PATH = Path(__file__).resolve().parents[1] / "questions_normalized.json"
@@ -715,25 +866,30 @@ class QuestionBank:
     async def fetch_questions(
         self, role: str, topics: list[str], difficulty: str, n: int = 8
     ) -> list[Question]:
-        # Priority 1: Try MongoDB first
+        logger.info(f"Fetching questions for role={role}, topics={topics}, difficulty={difficulty}, n={n}")
+        
+        # Priority 1: Try dynamic generation with Gemini (best for matching role/topics)
+        generated = await self._generate_dynamic_questions(role, topics, difficulty, n)
+        if generated:
+            logger.info(f"Generated {len(generated)} questions dynamically")
+            return generated
+        
+        # Priority 2: Try MongoDB
         if self._mongo_repo is not None:
             mongo_questions = await self._fetch_from_mongodb(role, topics, difficulty, n)
             if mongo_questions:
                 logger.info(f"Fetched {len(mongo_questions)} questions from MongoDB")
                 return mongo_questions
-        
-        # Priority 2: Try dynamic generation with Gemini
-        generated = await self._generate_dynamic_questions(role, topics, difficulty, n)
-        if generated:
-            return generated
 
         # Priority 3: Try Pinecone vector search
         if self._pinecone_index is not None and self._genai_client is not None:
             remote = await self._fetch_from_pinecone(role, topics, difficulty, n)
             if remote:
+                logger.info(f"Fetched {len(remote)} questions from Pinecone")
                 return remote
 
         # Priority 4: Fallback to local questions
+        logger.info("Falling back to local questions")
         return self._fetch_from_local(role, topics, difficulty, n)
 
     async def _generate_dynamic_questions(
@@ -743,13 +899,20 @@ class QuestionBank:
             return []
 
         topic_text = ", ".join(topics) if topics else "general technical interview"
+        logger.info(f"🎯 Generating {n} questions for role={role}, topics={topics}, difficulty={difficulty}")
+        
         prompt = (
-            "Generate a personalized mock interview question set as JSON only. "
-            "Return an array with exactly "
+            f"Generate {n} technical interview questions for a {role} position. "
+            f"Focus on these topics: {topic_text}. "
+            f"Difficulty: {difficulty}. "
+            "\n\nREQUIREMENTS:\n"
+            f"- Questions MUST be specific to {role} role\n"
+            f"- Questions MUST cover the topics: {topic_text}\n"
+            "- Avoid generic questions like 'Tell me about yourself'\n"
+            "- Return ONLY valid JSON array with exactly "
             f"{n}"
             " items. Each item must include: question, category, difficulty, ideal_answer. "
             "Difficulty progression should ramp from warm-up to challenging. "
-            f"Role target: {role}. Topics: {topic_text}. Requested baseline difficulty: {difficulty}. "
             "Keep questions practical, realistic, and interviewer-grade."
         )
 
@@ -770,12 +933,14 @@ class QuestionBank:
                     continue
 
             if not raw_text:
+                logger.warning(f"⚠️ Dynamic generation failed: no response from Gemini models")
                 return []
 
             payload = self._parse_json_payload(raw_text)
             if isinstance(payload, dict):
                 payload = payload.get("questions")
             if not isinstance(payload, list):
+                logger.warning(f"⚠️ Dynamic generation failed: invalid payload format")
                 return []
 
             generated: list[Question] = []
@@ -800,6 +965,9 @@ class QuestionBank:
                 if len(generated) >= n:
                     break
 
+            if generated:
+                logger.info(f"✅ Generated {len(generated)} questions: {[q.question[:50] + '...' for q in generated[:3]]}")
+            
             if len(generated) < n:
                 fallback = self._fetch_from_local(role, topics, difficulty, n=n * 2)
                 for question in fallback:
