@@ -1,5 +1,6 @@
 # Root-level Dockerfile for Railway deployment
 # This builds the backend from the repository root
+# Cache bust: 2026-03-01-v2
 
 FROM python:3.12-slim
 
