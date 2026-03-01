@@ -10,7 +10,7 @@ import time
 from typing import Optional, Callable
 from anthropic import AsyncAnthropic
 
-from backend.agent.realtime_models import (
+from agent.realtime_models import (
     ConversationState,
     VoiceFlowState,
     SilenceEvent,
@@ -18,12 +18,12 @@ from backend.agent.realtime_models import (
     AnalysisResult,
     InterruptionContext
 )
-from backend.agent.silence_detector import SilenceDetector
-from backend.agent.presence_verifier import PresenceVerifier
-from backend.agent.answer_analyzer import AnswerAnalyzer
-from backend.agent.interruption_engine import InterruptionEngine
-from backend.agent.context_tracker import ContextTracker
-from backend.agent.speech_buffer import SpeechBuffer
+from agent.silence_detector import SilenceDetector
+from agent.presence_verifier import PresenceVerifier
+from agent.answer_analyzer import AnswerAnalyzer
+from agent.interruption_engine import InterruptionEngine
+from agent.context_tracker import ContextTracker
+from agent.speech_buffer import SpeechBuffer
 
 
 class VoiceFlowController:

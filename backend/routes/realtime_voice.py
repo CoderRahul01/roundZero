@@ -13,17 +13,17 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, De
 from pydantic import BaseModel
 from anthropic import AsyncAnthropic
 
-from backend.agent.voice_flow_controller import VoiceFlowController
-from backend.agent.silence_detector import SilenceDetector
-from backend.agent.presence_verifier import PresenceVerifier
-from backend.agent.answer_analyzer import AnswerAnalyzer
-from backend.agent.interruption_engine import InterruptionEngine
-from backend.agent.context_tracker import ContextTracker
-from backend.agent.speech_buffer import SpeechBuffer
-from backend.agent.gemini_embedding_service import GeminiEmbeddingService
-from backend.services.tts_service import TTSService
-from backend.rate_limit import RateLimiter
-from backend.middleware import get_current_user
+from agent.voice_flow_controller import VoiceFlowController
+from agent.silence_detector import SilenceDetector
+from agent.presence_verifier import PresenceVerifier
+from agent.answer_analyzer import AnswerAnalyzer
+from agent.interruption_engine import InterruptionEngine
+from agent.context_tracker import ContextTracker
+from agent.speech_buffer import SpeechBuffer
+from agent.gemini_embedding_service import GeminiEmbeddingService
+from services.tts_service import TTSService
+from rate_limit import RateLimiter
+from middleware import get_current_user
 
 router = APIRouter(prefix="/session", tags=["realtime-voice"])
 
