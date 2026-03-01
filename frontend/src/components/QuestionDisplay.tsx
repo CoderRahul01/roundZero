@@ -1,139 +1,103 @@
-import React from "react";
-import { G } from "../theme";
+/**
+ * QuestionDisplay - Question progress and text display
+ * 
+ * Features:
+ * - Current question number and total
+ * - Question text display
+ * - Progress bar
+ * - Real-time updates via WebSocket
+ */
+
+import React from 'react';
 
 interface QuestionDisplayProps {
-  questionNumber: number;
+  currentQuestion: number;
   totalQuestions: number;
-  questionText: string;
-  isListening: boolean;
+  questionText?: string;
+  showProgress?: boolean;
 }
 
-export function QuestionDisplay({
-  questionNumber,
+const QuestionDisplay: React.FC<QuestionDisplayProps> = ({
+  currentQuestion,
   totalQuestions,
   questionText,
-  isListening,
-}: QuestionDisplayProps) {
-  const progress = (questionNumber / totalQuestions) * 100;
+  showProgress = true
+}) => {
+  // Calculate progress percentage
+  const progressPercentage = (currentQuestion / totalQuestions) * 100;
 
   return (
-    <div
-      style={{
-        background: G.surface,
-        border: `1px solid ${G.border}`,
-        padding: "2rem",
-        marginBottom: "1.5rem",
-      }}
-    >
-      {/* Progress Bar */}
-      <div style={{ marginBottom: "1.5rem" }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: "0.5rem",
-          }}
-        >
-          <span
-            style={{
-              fontFamily: G.mono,
-              fontSize: "0.75rem",
-              color: G.accent,
-              letterSpacing: "0.1em",
-              textTransform: "uppercase",
-            }}
-          >
-            Question {questionNumber} of {totalQuestions}
+    <div className="w-full">
+      {/* Question counter */}
+      <div className="flex justify-between items-center mb-3">
+        <h3 className="text-white font-semibold text-lg">Current Question</h3>
+        <div className="flex items-center space-x-2">
+          <span className="text-blue-400 font-bold text-xl">
+            {currentQuestion}
           </span>
-          <span
-            style={{
-              fontFamily: G.mono,
-              fontSize: "0.75rem",
-              color: G.muted,
-            }}
-          >
-            {Math.round(progress)}%
+          <span className="text-gray-500">/</span>
+          <span className="text-gray-400 text-lg">
+            {totalQuestions}
           </span>
-        </div>
-        <div
-          style={{
-            height: "6px",
-            background: G.surface2,
-            borderRadius: "3px",
-            overflow: "hidden",
-          }}
-        >
-          <div
-            style={{
-              height: "100%",
-              width: `${progress}%`,
-              background: `linear-gradient(90deg, ${G.accent}, ${G.accent}dd)`,
-              transition: "width 0.5s ease",
-              borderRadius: "3px",
-            }}
-          />
         </div>
       </div>
 
-      {/* Question Text */}
-      <div
-        style={{
-          background: G.surface2,
-          padding: "1.5rem",
-          borderLeft: `4px solid ${G.accent}`,
-        }}
-      >
-        <p
-          style={{
-            fontSize: "1.2rem",
-            color: G.text,
-            lineHeight: 1.7,
-            fontWeight: 500,
-            margin: 0,
-          }}
-        >
-          {questionText}
-        </p>
-      </div>
-
-      {/* Listening Indicator */}
-      {isListening && (
-        <div
-          style={{
-            marginTop: "1rem",
-            display: "flex",
-            alignItems: "center",
-            gap: "0.5rem",
-            color: G.accent,
-            fontSize: "0.9rem",
-          }}
-        >
-          <div
-            style={{
-              width: "8px",
-              height: "8px",
-              borderRadius: "50%",
-              background: G.accent,
-              animation: "pulse 1.5s ease-in-out infinite",
-            }}
-          />
-          <span>Listening for your answer...</span>
+      {/* Progress bar */}
+      {showProgress && (
+        <div className="mb-4">
+          <div className="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
+            <div
+              className="bg-blue-600 h-2 rounded-full transition-all duration-500 ease-out"
+              style={{ width: `${progressPercentage}%` }}
+            />
+          </div>
+          <div className="flex justify-between mt-1 text-xs text-gray-500">
+            <span>Start</span>
+            <span>{Math.round(progressPercentage)}% Complete</span>
+            <span>End</span>
+          </div>
         </div>
       )}
 
-      <style>{`
-        @keyframes pulse {
-          0%, 100% {
-            opacity: 1;
-            transform: scale(1);
-          }
-          50% {
-            opacity: 0.5;
-            transform: scale(1.2);
-          }
-        }
-      `}</style>
+      {/* Question text */}
+      {questionText && (
+        <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <div className="flex items-start space-x-3">
+            <div className="flex-shrink-0 mt-1">
+              <span className="text-2xl">❓</span>
+            </div>
+            <div className="flex-1">
+              <p className="text-gray-300 leading-relaxed">
+                {questionText}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Question status indicators */}
+      <div className="mt-3 flex items-center justify-between text-sm">
+        <div className="flex items-center space-x-2">
+          <div className="w-2 h-2 bg-green-500 rounded-full" />
+          <span className="text-gray-400">
+            {currentQuestion - 1} completed
+          </span>
+        </div>
+        <div className="flex items-center space-x-2">
+          <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+          <span className="text-gray-400">
+            In progress
+          </span>
+        </div>
+        <div className="flex items-center space-x-2">
+          <div className="w-2 h-2 bg-gray-600 rounded-full" />
+          <span className="text-gray-400">
+            {totalQuestions - currentQuestion} remaining
+          </span>
+        </div>
+      </div>
     </div>
   );
-}
+};
+
+export default QuestionDisplay;

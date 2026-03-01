@@ -1,7 +1,7 @@
 """
 Text-to-Speech Service using ElevenLabs API.
 
-Provides async speech synthesis with caching for performance optimization.
+Provides async speech synthesis with Redis caching for performance optimization.
 """
 
 import logging
@@ -16,11 +16,12 @@ logger = logging.getLogger(__name__)
 
 class ElevenLabsTTSService:
     """
-    Async text-to-speech service using ElevenLabs API with caching.
+    Async text-to-speech service using ElevenLabs API with Redis caching.
     
     Features:
     - High-quality voice synthesis
-    - In-memory caching for repeated phrases
+    - Redis caching for persistent storage across instances
+    - In-memory caching for ultra-fast repeated access
     - Streaming support for reduced latency
     - Batch synthesis for preloading
     - Configurable voice settings
@@ -31,7 +32,8 @@ class ElevenLabsTTSService:
         self, 
         api_key: str, 
         voice_id: str = "21m00Tcm4TlvDq8ikWAM",  # Default: Rachel voice
-        model: str = "eleven_turbo_v2"
+        model: str = "eleven_turbo_v2",
+        redis_cache=None  # Optional TTSCache instance
     ):
         """
         Initialize ElevenLabs client.
@@ -40,13 +42,15 @@ class ElevenLabsTTSService:
             api_key: ElevenLabs API key
             voice_id: Voice ID to use (default: Rachel)
             model: Model to use (default: eleven_turbo_v2 for low latency)
+            redis_cache: Optional TTSCache instance for Redis caching
         """
         self.api_key = api_key
         self.voice_id = voice_id
         self.model = model
         self.client = AsyncElevenLabs(api_key=api_key)
-        self.cache: dict[str, bytes] = {}  # In-memory cache for repeated phrases
-        logger.info(f"ElevenLabsTTSService initialized with voice_id: {voice_id}")
+        self.redis_cache = redis_cache  # Redis cache (persistent)
+        self.memory_cache: dict[str, bytes] = {}  # In-memory cache (fast)
+        logger.info(f"ElevenLabsTTSService initialized with voice_id: {voice_id}, Redis cache: {redis_cache is not None}")
     
     async def synthesize_speech(
         self, 
@@ -55,8 +59,12 @@ class ElevenLabsTTSService:
         use_cache: bool = True
     ) -> bytes:
         """
-        Convert text to audio bytes with caching.
-        Caches common phrases to reduce API calls and improve latency.
+        Convert text to audio bytes with two-tier caching (memory + Redis).
+        
+        Cache hierarchy:
+        1. Check in-memory cache (fastest)
+        2. Check Redis cache (fast, persistent)
+        3. Generate via API (slowest)
         
         Args:
             text: Text to convert to speech
@@ -66,12 +74,21 @@ class ElevenLabsTTSService:
         Returns:
             Audio data as bytes
         """
-        # Check cache first
+        # Check memory cache first (fastest)
         if use_cache:
             cache_key = self._get_cache_key(text, voice_settings)
-            if cache_key in self.cache:
-                logger.debug(f"Cache hit for text: {text[:50]}...")
-                return self.cache[cache_key]
+            if cache_key in self.memory_cache:
+                logger.debug(f"Memory cache HIT for text: {text[:50]}...")
+                return self.memory_cache[cache_key]
+            
+            # Check Redis cache (fast, persistent)
+            if self.redis_cache:
+                cached_audio = await self.redis_cache.get(text, self.voice_id)
+                if cached_audio:
+                    logger.debug(f"Redis cache HIT for text: {text[:50]}...")
+                    # Store in memory cache for next time
+                    self.memory_cache[cache_key] = cached_audio
+                    return cached_audio
         
         # Default voice settings for natural interview tone
         if voice_settings is None:
@@ -83,7 +100,7 @@ class ElevenLabsTTSService:
             )
         
         try:
-            # Generate audio
+            # Generate audio via API
             audio = await self.client.generate(
                 text=text,
                 voice=self.voice_id,
@@ -96,7 +113,13 @@ class ElevenLabsTTSService:
             
             # Cache result if enabled
             if use_cache:
-                self.cache[cache_key] = audio_bytes
+                # Store in memory cache
+                self.memory_cache[cache_key] = audio_bytes
+                
+                # Store in Redis cache (persistent)
+                if self.redis_cache:
+                    await self.redis_cache.set(text, audio_bytes, self.voice_id)
+                
                 logger.debug(f"Cached audio for text: {text[:50]}...")
             
             logger.info(f"Synthesized {len(audio_bytes)} bytes for {len(text)} characters")
@@ -260,19 +283,19 @@ class ElevenLabsTTSService:
         return hashlib.md5(cache_input.encode()).hexdigest()
     
     def clear_cache(self):
-        """Clear audio cache to free memory."""
+        """Clear memory cache to free memory. Redis cache persists."""
         cache_size = self.get_cache_size()
-        self.cache.clear()
-        logger.info(f"Cleared cache ({cache_size / 1024 / 1024:.2f} MB)")
+        self.memory_cache.clear()
+        logger.info(f"Cleared memory cache ({cache_size / 1024 / 1024:.2f} MB)")
     
     def get_cache_size(self) -> int:
         """
-        Get current cache size in bytes.
+        Get current memory cache size in bytes.
         
         Returns:
-            Total size of cached audio in bytes
+            Total size of cached audio in memory
         """
-        return sum(len(audio) for audio in self.cache.values())
+        return sum(len(audio) for audio in self.memory_cache.values())
     
     def get_cache_stats(self) -> dict:
         """
@@ -282,7 +305,8 @@ class ElevenLabsTTSService:
             Dictionary with cache metrics
         """
         return {
-            "entries": len(self.cache),
-            "size_bytes": self.get_cache_size(),
-            "size_mb": self.get_cache_size() / 1024 / 1024
+            "memory_entries": len(self.memory_cache),
+            "memory_size_bytes": self.get_cache_size(),
+            "memory_size_mb": self.get_cache_size() / 1024 / 1024,
+            "redis_enabled": self.redis_cache is not None
         }
