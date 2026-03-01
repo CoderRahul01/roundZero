@@ -7,6 +7,7 @@ transitions and coordinating all components.
 
 import asyncio
 import time
+import os
 from typing import Optional, Callable
 from anthropic import AsyncAnthropic
 
@@ -24,6 +25,10 @@ from agent.answer_analyzer import AnswerAnalyzer
 from agent.interruption_engine import InterruptionEngine
 from agent.context_tracker import ContextTracker
 from agent.speech_buffer import SpeechBuffer
+from data.voice_session_repository import VoiceSessionRepository
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class VoiceFlowController:
@@ -42,7 +47,8 @@ class VoiceFlowController:
         context_tracker: ContextTracker,
         speech_buffer: SpeechBuffer,
         tts_service,
-        stt_service
+        stt_service,
+        repository: Optional[VoiceSessionRepository] = None
     ):
         self.session_id = session_id
         self.silence_detector = silence_detector
@@ -53,6 +59,15 @@ class VoiceFlowController:
         self.speech_buffer = speech_buffer
         self.tts_service = tts_service
         self.stt_service = stt_service
+        
+        # Data persistence
+        self.repository = repository
+        if not repository:
+            # Initialize repository if not provided
+            mongodb_uri = os.getenv("MONGODB_URI")
+            if mongodb_uri:
+                self.repository = VoiceSessionRepository(mongodb_uri)
+                logger.info(f"Initialized voice session repository for {session_id}")
         
         self.state = VoiceFlowState(
             conversation_state=ConversationState.IDLE,
@@ -70,6 +85,9 @@ class VoiceFlowController:
         
         # WebSocket connection
         self._websocket = None
+        
+        # Current question ID for data persistence
+        self._current_question_id: Optional[str] = None
     
     def set_websocket(self, websocket):
         """Set WebSocket connection for sending messages to client."""
@@ -83,12 +101,16 @@ class VoiceFlowController:
         await self._transition_to(ConversationState.ASKING_QUESTION)
         self.state.current_question = first_question
         
+        # Generate question ID for tracking
+        import uuid
+        self._current_question_id = str(uuid.uuid4())
+        
         # Extract question topic for potential interruptions
         self.state.current_question_topic = await self.context_tracker.extract_topic(
             first_question
         )
         
-        # Generate and play question audio
+        # Generate and play question audio (with caching for speed)
         audio = await self.tts_service.synthesize_speech(first_question)
         await self._play_audio(audio)
         
@@ -97,7 +119,8 @@ class VoiceFlowController:
             await self._websocket.send_json({
                 "type": "question",
                 "text": first_question,
-                "topic": self.state.current_question_topic
+                "topic": self.state.current_question_topic,
+                "question_id": self._current_question_id
             })
         
         # Transition to listening
@@ -119,6 +142,17 @@ class VoiceFlowController:
         if is_final:
             self.speech_buffer.add_final_segment(transcript_segment)
             self.state.speech_buffer = self.speech_buffer.get_accumulated_text()
+            
+            # Save transcript to database
+            if self.repository and self._current_question_id:
+                asyncio.create_task(
+                    self.repository.save_transcript(
+                        session_id=self.session_id,
+                        question_id=self._current_question_id,
+                        transcript_segment=transcript_segment,
+                        is_final=True
+                    )
+                )
             
             # Trigger analysis if buffer has enough content
             if self.speech_buffer.should_trigger_analysis():
@@ -179,6 +213,18 @@ class VoiceFlowController:
                 "attempt": self.state.interruption_count + 1
             })
         
+        # Save interruption to database
+        if self.repository and self._current_question_id:
+            asyncio.create_task(
+                self.repository.save_interruption(
+                    session_id=self.session_id,
+                    question_id=self._current_question_id,
+                    interruption_message=interruption_message,
+                    reason="off_topic",
+                    off_topic_content=self.state.speech_buffer
+                )
+            )
+        
         # Clear off-topic content from buffer
         self.speech_buffer.clear()
         self.state.speech_buffer = ""
@@ -203,15 +249,42 @@ class VoiceFlowController:
     async def _run_analysis(self):
         """
         Run answer analysis in background.
+        Optimized for speed with timeout.
         """
-        result = await self.answer_analyzer.analyze_relevance(
-            question=self.state.current_question,
-            answer_buffer=self.state.speech_buffer,
-            question_topic=self.state.current_question_topic
-        )
-        
-        if result.should_interrupt:
-            await self.handle_off_topic_detected(result.interruption_message)
+        try:
+            # Set timeout for analysis to prevent blocking
+            result = await asyncio.wait_for(
+                self.answer_analyzer.analyze_relevance(
+                    question=self.state.current_question,
+                    answer_buffer=self.state.speech_buffer,
+                    question_topic=self.state.current_question_topic
+                ),
+                timeout=3.0  # 3 second timeout for real-time feel
+            )
+            
+            # Save analysis result to database
+            if self.repository and self._current_question_id:
+                asyncio.create_task(
+                    self.repository.save_analysis_result(
+                        session_id=self.session_id,
+                        question_id=self._current_question_id,
+                        analysis_type="relevance",
+                        result={
+                            "is_relevant": result.is_relevant,
+                            "semantic_similarity": result.semantic_similarity,
+                            "should_interrupt": result.should_interrupt,
+                            "confidence": result.confidence,
+                            "analysis_duration": result.analysis_duration
+                        }
+                    )
+                )
+            
+            if result.should_interrupt:
+                await self.handle_off_topic_detected(result.interruption_message)
+        except asyncio.TimeoutError:
+            logger.warning("Analysis timeout - skipping this cycle")
+        except Exception as e:
+            logger.error(f"Analysis error: {e}")
     
     async def _evaluate_answer(self):
         """

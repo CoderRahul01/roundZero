@@ -100,16 +100,16 @@ class ElevenLabsTTSService:
             )
         
         try:
-            # Generate audio via API
-            audio = await self.client.generate(
+            # Generate audio via API using text_to_speech.convert
+            audio_generator = self.client.text_to_speech.convert(
+                voice_id=self.voice_id,
                 text=text,
-                voice=self.voice_id,
-                model=self.model,
+                model_id=self.model,
                 voice_settings=voice_settings
             )
             
             # Convert generator to bytes
-            audio_bytes = b"".join([chunk async for chunk in audio])
+            audio_bytes = b"".join([chunk async for chunk in audio_generator])
             
             # Cache result if enabled
             if use_cache:
@@ -155,16 +155,16 @@ class ElevenLabsTTSService:
             )
         
         try:
-            audio = await self.client.generate(
+            audio_generator = self.client.text_to_speech.convert(
+                voice_id=self.voice_id,
                 text=text,
-                voice=self.voice_id,
-                model=self.model,
+                model_id=self.model,
                 stream=True,
                 voice_settings=voice_settings
             )
             
             chunk_count = 0
-            async for chunk in audio:
+            async for chunk in audio_generator:
                 chunk_count += 1
                 yield chunk
             

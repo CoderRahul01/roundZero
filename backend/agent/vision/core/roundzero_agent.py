@@ -141,6 +141,7 @@ class RoundZeroAgent:
         """
         try:
             self.ai_state = "speaking"
+            await self._broadcast_ai_state()
             
             # Generate and speak greeting
             greeting = await self._generate_greeting()
@@ -154,6 +155,7 @@ class RoundZeroAgent:
                 await self._speak("I apologize, but I'm unable to load questions at this time.")
             
             self.ai_state = "listening"
+            await self._broadcast_ai_state()
             
         except Exception as e:
             logger.error(f"Failed to start interview: {e}")
@@ -203,6 +205,7 @@ class RoundZeroAgent:
         """
         try:
             self.ai_state = "thinking"
+            await self._broadcast_ai_state()
             
             # Get latest emotion data
             emotion_data = self.emotion_processor.get_latest_emotion()
@@ -250,6 +253,7 @@ class RoundZeroAgent:
         except Exception as e:
             logger.error(f"Decision request failed: {e}")
             self.ai_state = "listening"
+            await self._broadcast_ai_state()
     
     async def _execute_action(self, decision: Dict[str, Any]) -> None:
         """
@@ -264,30 +268,37 @@ class RoundZeroAgent:
         if action == InterviewAction.CONTINUE:
             # Continue listening, no interruption
             self.ai_state = "listening"
+            await self._broadcast_ai_state()
             logger.debug("Action: CONTINUE - no interruption")
         
         elif action == InterviewAction.INTERRUPT:
             # Speak interruption message
             self.ai_state = "speaking"
+            await self._broadcast_ai_state()
             await self._speak(message)
             # Clear transcript buffer for fresh start
             self.transcript_buffer = ""
             self.word_count = 0
             self.ai_state = "listening"
+            await self._broadcast_ai_state()
             logger.info(f"Action: INTERRUPT - {message}")
         
         elif action == InterviewAction.ENCOURAGE:
             # Speak encouragement
             self.ai_state = "speaking"
+            await self._broadcast_ai_state()
             await self._speak(message)
             self.ai_state = "listening"
+            await self._broadcast_ai_state()
             logger.info(f"Action: ENCOURAGE - {message}")
         
         elif action == InterviewAction.HINT:
             # Speak hint
             self.ai_state = "speaking"
+            await self._broadcast_ai_state()
             await self._speak(message)
             self.ai_state = "listening"
+            await self._broadcast_ai_state()
             logger.info(f"Action: HINT - {message}")
         
         elif action == InterviewAction.NEXT:
@@ -366,18 +377,32 @@ class RoundZeroAgent:
         
         question = self.questions[index]
         self.ai_state = "speaking"
+        await self._broadcast_ai_state()
         await self._speak(question.get("text", ""))
         self.ai_state = "listening"
+        await self._broadcast_ai_state()
         
         logger.info(f"Asked question {index + 1}/{len(self.questions)}")
     
+    async def _broadcast_ai_state(self) -> None:
+        """
+        Broadcast current AI state to frontend via WebSocket.
+        """
+        try:
+            from routes.vision_websocket import broadcast_ai_state_change
+            await broadcast_ai_state_change(self.session_id, self.ai_state)
+        except Exception as e:
+            logger.error(f"Failed to broadcast AI state: {e}")
+    
     async def _speak(self, text: str) -> None:
         """
-        Generate speech and play audio.
+        Generate speech and send audio to frontend via WebSocket.
         
         Args:
             text: Text to speak
         """
+        import base64
+        
         try:
             # Store agent transcript
             await self.mongo_repository.add_transcript_segment(
@@ -389,12 +414,16 @@ class RoundZeroAgent:
             )
             
             # Generate audio with TTS
-            audio = await self.tts_service.synthesize_speech(text)
+            audio_bytes = await self.tts_service.synthesize_speech(text)
             
-            # TODO: Play audio through Stream.io
-            # This will be implemented in Stream.io integration
+            # Convert audio to base64 for WebSocket transmission
+            audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
             
-            logger.debug(f"Spoke: {text[:50]}...")
+            # Send audio through WebSocket
+            from routes.vision_websocket import broadcast_ai_audio
+            await broadcast_ai_audio(self.session_id, audio_base64)
+            
+            logger.debug(f"Spoke: {text[:50]}... (audio sent via WebSocket)")
             
         except Exception as e:
             logger.error(f"Speech generation failed: {e}")
@@ -421,6 +450,7 @@ class RoundZeroAgent:
         """
         try:
             self.ai_state = "thinking"
+            await self._broadcast_ai_state()
             
             # Generate session summary with Claude
             summary = await self._generate_session_summary()
@@ -444,10 +474,12 @@ class RoundZeroAgent:
             
             # Thank candidate
             self.ai_state = "speaking"
+            await self._broadcast_ai_state()
             closing = "Great job! Your interview is complete. You'll receive detailed feedback shortly."
             await self._speak(closing)
             
             self.ai_state = "idle"
+            await self._broadcast_ai_state()
             logger.info(f"Interview completed for session {self.session_id}")
             
         except Exception as e:

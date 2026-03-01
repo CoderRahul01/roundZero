@@ -6,6 +6,7 @@ using Vision Agents integration.
 """
 
 import uuid
+import os
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -41,6 +42,7 @@ class StartLiveSessionResponse(BaseModel):
     session_id: str
     call_id: str
     stream_token: str
+    stream_api_key: str
     status: str
     question_count: int
 
@@ -154,6 +156,7 @@ async def start_live_session(
             session_id=session_id,
             call_id=call_id,
             stream_token=stream_token,
+            stream_api_key=os.getenv("STREAM_API_KEY", ""),
             status="initialized",
             question_count=5
         )

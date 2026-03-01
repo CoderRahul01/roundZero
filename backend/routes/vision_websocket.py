@@ -260,6 +260,23 @@ async def broadcast_ai_state_change(session_id: str, ai_state: str):
     }, session_id)
 
 
+async def broadcast_ai_audio(session_id: str, audio_base64: str):
+    """
+    Broadcast AI-generated audio to all clients.
+    
+    Args:
+        session_id: Session identifier
+        audio_base64: Base64-encoded audio data
+    """
+    await manager.broadcast_to_session({
+        "type": "ai_audio",
+        "audio": {
+            "data": audio_base64,
+            "format": "mp3"
+        }
+    }, session_id)
+
+
 def get_connection_manager() -> ConnectionManager:
     """
     Get the global connection manager instance.

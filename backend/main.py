@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -73,6 +74,12 @@ async def startup_event():
         mongo_log_handler = setup_mongo_logging(settings.mongodb_uri, "RoundZero")
         mongo_log_handler.start_worker()
         logger.info("MongoDB logging active.")
+    
+    # Preload TTS cache for common phrases (async, non-blocking)
+    logger.info("Preloading TTS cache for faster responses...")
+    asyncio.create_task(_preload_tts_cache())
+    
+    logger.info("Startup complete - ready for requests")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -168,6 +175,7 @@ def generate_stream_token(user_id: str) -> str | None:
     """Generate a short-lived JWT token for Stream Video if configured."""
     api_secret = settings.stream_api_secret or os.getenv("STREAM_API_SECRET")
     if not api_secret:
+        logger.warning("STREAM_API_SECRET not configured - Stream.io token will be null")
         return None
 
     payload = {
@@ -175,7 +183,9 @@ def generate_stream_token(user_id: str) -> str | None:
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600,
     }
-    return jwt.encode(payload, api_secret, algorithm="HS256")
+    token = jwt.encode(payload, api_secret, algorithm="HS256")
+    logger.info(f"✓ Generated Stream.io token for user {user_id} (length: {len(token)})")
+    return token
 
 
 def generate_backend_token(user_id: str) -> str:
@@ -322,3 +332,50 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+async def _preload_tts_cache():
+    """Preload common TTS phrases into cache for faster first responses."""
+    try:
+        from services.tts_service import ElevenLabsTTSService
+        from services.tts_cache_service import TTSCacheService
+        
+        # Initialize services
+        api_key = os.getenv("ELEVENLABS_API_KEY")
+        if not api_key:
+            logger.warning("ELEVENLABS_API_KEY not set - skipping TTS preload")
+            return
+        
+        tts_service = ElevenLabsTTSService(api_key=api_key)
+        cache_service = TTSCacheService()
+        
+        # Preload common phrases
+        common_phrases = [
+            "Hello! Welcome to your mock interview.",
+            "Great answer! Let's move on.",
+            "Can you elaborate on that?",
+            "That's a good start.",
+            "Thank you for your response.",
+            "Hey, can you hear me?",
+            "Let me ask you the question again.",
+            "Wait, I asked about",
+            "Let me stop you there."
+        ]
+        
+        logger.info(f"Preloading {len(common_phrases)} TTS phrases...")
+        
+        # Preload in background
+        for phrase in common_phrases:
+            try:
+                # Check if already cached
+                cached = await cache_service.get_cached_audio(phrase)
+                if not cached:
+                    # Generate and cache
+                    audio = await tts_service.synthesize_speech(phrase)
+                    await cache_service.cache_audio(phrase, audio, "common")
+            except Exception as e:
+                logger.warning(f"Failed to preload phrase: {e}")
+        
+        logger.info("TTS cache preload complete")
+    except Exception as e:
+        logger.error(f"TTS preload error: {e}")

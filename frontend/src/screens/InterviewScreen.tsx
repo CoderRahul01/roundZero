@@ -1,12 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import {
-  ParticipantView,
-  useCall,
-  useCallStateHooks,
-} from "@stream-io/video-react-sdk";
 import { endSession, submitAnswer, getEventSource } from "../api";
 import { G } from "../theme";
 import { LiveSessionConfig } from "../types";
+import { useStreamAudio } from "../hooks/useStreamAudio";
 
 type RecognitionCtor = new () => {
   continuous: boolean;
@@ -42,64 +38,73 @@ function emotionColor(emotion: string): string {
   return map[emotion] || "#94a3b8";
 }
 
-function StreamParticipantStage() {
-  const call = useCall();
-  const { useParticipants } = useCallStateHooks();
-  const participants = useParticipants();
-  const [joinState, setJoinState] = useState<"joining" | "joined" | "failed">("joining");
+function StreamParticipantStage({ 
+  streamApiKey, 
+  streamToken, 
+  callId 
+}: { 
+  streamApiKey: string; 
+  streamToken: string; 
+  callId: string;
+}) {
+  const { 
+    connectionStatus, 
+    audioLevel, 
+    error: streamError,
+    isAgentConnected 
+  } = useStreamAudio({
+    streamApiKey,
+    streamToken,
+    callId,
+    userId: 'frontend-user'
+  });
 
-  useEffect(() => {
-    if (!call) {
-      return;
-    }
-
-    setJoinState("joining");
-    call.join({ create: true })
-      .then(async () => {
-        setJoinState("joined");
-        // Enable media independently so one failure doesn't block the other
-        try {
-          await call.camera.enable();
-        } catch (e) {
-          console.warn("Camera failed to enable:", e);
-        }
-        try {
-          await call.microphone.enable();
-        } catch (e) {
-          console.warn("Microphone failed to enable:", e);
-        }
-      })
-      .catch((err) => {
-        console.error("Failed to join call:", err);
-        setJoinState("failed");
-      });
-
-    return () => {
-      call.leave().catch(() => undefined);
-    };
-  }, [call]);
-
-  if (joinState === "failed") {
+  if (streamError) {
     return (
       <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", background: "linear-gradient(135deg, #0d0d1a 0%, #111126 100%)" }}>
-        <p style={{ color: G.accent3, fontSize: "0.85rem" }}>Failed to join Stream call. Continue with text mode.</p>
-      </div>
-    );
-  }
-
-  if (participants.length === 0) {
-    return (
-      <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", background: "linear-gradient(135deg, #0d0d1a 0%, #111126 100%)" }}>
-        <p style={{ color: G.muted, fontSize: "0.82rem" }}>
-          {joinState === "joining" ? "Joining Stream call..." : "Camera ready. Waiting for participant feed."}
+        <p style={{ color: G.accent3, fontSize: "0.85rem" }}>
+          Stream connection error: {streamError.message}
         </p>
       </div>
     );
   }
 
+  if (connectionStatus === 'connecting') {
+    return (
+      <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", background: "linear-gradient(135deg, #0d0d1a 0%, #111126 100%)" }}>
+        <p style={{ color: G.muted, fontSize: "0.82rem" }}>Connecting to audio stream...</p>
+      </div>
+    );
+  }
+
+  if (connectionStatus === 'disconnected') {
+    return (
+      <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", background: "linear-gradient(135deg, #0d0d1a 0%, #111126 100%)" }}>
+        <p style={{ color: G.muted, fontSize: "0.82rem" }}>Audio stream disconnected</p>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ width: "100%", height: "100%", position: "relative" }}>
-      <ParticipantView participant={participants[0]} />
+    <div style={{ width: "100%", height: "100%", position: "relative", background: "linear-gradient(135deg, #0d0d1a 0%, #111126 100%)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      {/* AI Avatar with audio visualization */}
+      <div style={{ 
+        width: 120, 
+        height: 120, 
+        borderRadius: "50%", 
+        background: `linear-gradient(135deg, ${G.surface2}, ${G.border})`, 
+        border: `3px solid ${audioLevel > 10 ? G.accent : G.border}`,
+        boxShadow: audioLevel > 10 ? `0 0 ${20 + audioLevel * 0.3}px ${G.accent}` : 'none',
+        display: "flex", 
+        alignItems: "center", 
+        justifyContent: "center", 
+        fontSize: "3rem",
+        transition: "all 0.15s ease"
+      }}>
+        🤖
+      </div>
+
+      {/* Connection status badge */}
       <div style={{
         position: "absolute",
         top: 12,
@@ -116,9 +121,31 @@ function StreamParticipantStage() {
       }}>
         <div style={{ width: 6, height: 6, borderRadius: "50%", background: G.accent, boxShadow: `0 0 8px ${G.accent}` }} />
         <span style={{ color: "#fff", fontSize: "0.65rem", fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase" }}>
-          AI Observing
+          {isAgentConnected ? 'AI Speaking' : 'Waiting for AI'}
         </span>
       </div>
+
+      {/* Audio level indicator */}
+      {audioLevel > 5 && (
+        <div style={{
+          position: "absolute",
+          bottom: 20,
+          left: "50%",
+          transform: "translateX(-50%)",
+          width: "60%",
+          height: 4,
+          background: "rgba(255,255,255,0.1)",
+          borderRadius: 2,
+          overflow: "hidden"
+        }}>
+          <div style={{
+            height: "100%",
+            width: `${Math.min(audioLevel, 100)}%`,
+            background: G.accent,
+            transition: "width 0.1s ease"
+          }} />
+        </div>
+      )}
     </div>
   );
 }
@@ -142,6 +169,7 @@ export function InterviewScreen({
   const [fillers, setFillers] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [hasAgentJoined, setHasAgentJoined] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [micSupported, setMicSupported] = useState(true);
   const [isListening, setIsListening] = useState(false);
@@ -255,9 +283,22 @@ export function InterviewScreen({
           if (!mounted) return;
           const data = JSON.parse(e.data);
           console.log("SSE [agent_transcript]:", data);
+          setHasAgentJoined(true);
           if (data.text) {
             setAiMsg(data.text);
             setIsAiSpeaking(true);
+            
+            // DEMO FIX: Speak the transcript using browser TTS
+            if (streamEnabled && typeof window !== "undefined" && "speechSynthesis" in window) {
+              window.speechSynthesis.cancel();
+              const utterance = new SpeechSynthesisUtterance(data.text);
+              utterance.rate = 1.0;
+              utterance.pitch = 1.0;
+              utterance.onstart = () => setIsAiSpeaking(true);
+              utterance.onend = () => setIsAiSpeaking(false);
+              utterance.onerror = () => setIsAiSpeaking(false);
+              window.speechSynthesis.speak(utterance);
+            }
           }
         });
 
@@ -265,9 +306,22 @@ export function InterviewScreen({
           if (!mounted) return;
           const data = JSON.parse(e.data);
           console.log("SSE [agent_message]:", data);
+          setHasAgentJoined(true);
           if (data.text) {
             setAiMsg(data.text);
             setIsAiSpeaking(false);
+            
+            // DEMO FIX: Speak the message using browser TTS
+            if (streamEnabled && typeof window !== "undefined" && "speechSynthesis" in window) {
+              window.speechSynthesis.cancel();
+              const utterance = new SpeechSynthesisUtterance(data.text);
+              utterance.rate = 1.0;
+              utterance.pitch = 1.0;
+              utterance.onstart = () => setIsAiSpeaking(true);
+              utterance.onend = () => setIsAiSpeaking(false);
+              utterance.onerror = () => setIsAiSpeaking(false);
+              window.speechSynthesis.speak(utterance);
+            }
             
             // Sync question state if the agent is asking a new question
             // We now broadcast explicit "next_question" and "question_scored" events
@@ -582,15 +636,28 @@ export function InterviewScreen({
         </div>
 
         <div style={{ flex: 1, background: G.surface, border: `1px solid ${G.border}`, position: "relative", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", minHeight: "320px" }}>
-          {streamEnabled ? (
-            <StreamParticipantStage />
+          {!hasAgentJoined ? (
+            <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "linear-gradient(135deg, #0d0d1a 0%, #111126 100%)", padding: "2rem", textAlign: "center" }}>
+              <div style={{ width: 44, height: 44, border: `3px solid ${G.border}`, borderTopColor: G.accent, borderRadius: "50%", animation: "spin 1s linear infinite", marginBottom: "1.5rem" }} />
+              <style>{`@keyframes spin { 100% { transform: rotate(360deg); } }`}</style>
+              <h3 style={{ color: G.text, marginBottom: "0.5rem", fontSize: "1.2rem", fontWeight: 600 }}>Connecting to AI Interviewer...</h3>
+              <p style={{ color: G.muted, fontSize: "0.9rem", maxWidth: "400px", lineHeight: 1.5 }}>
+                Please wait while we initialize the neural pathways and load your personalized interview profile. This usually takes about 10-15 seconds.
+              </p>
+            </div>
           ) : (
             <div style={{ width: "100%", height: "100%", background: "linear-gradient(135deg, #0d0d1a 0%, #111126 100%)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
-              <div style={{ width: 110, height: 110, borderRadius: "50%", background: `linear-gradient(135deg, ${G.surface2}, ${G.border})`, border: `2px solid ${G.border}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "2.6rem" }}>
-                C
+              <div style={{ width: 110, height: 110, borderRadius: "50%", background: `linear-gradient(135deg, ${G.surface2}, ${G.border})`, border: `2px solid ${G.accent}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "2.6rem", boxShadow: isAiSpeaking ? `0 0 30px ${G.accent}` : 'none', transition: 'all 0.3s ease' }}>
+                🤖
+              </div>
+              <div style={{ position: "absolute", top: 12, right: 12, padding: "4px 10px", background: "rgba(0, 0, 0, 0.4)", backdropFilter: "blur(4px)", borderRadius: "20px", border: `1px solid ${G.accent}44`, display: "flex", alignItems: "center", gap: 6, zIndex: 10 }}>
+                <div style={{ width: 6, height: 6, borderRadius: "50%", background: G.accent, boxShadow: `0 0 8px ${G.accent}` }} />
+                <span style={{ color: "#fff", fontSize: "0.65rem", fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase" }}>
+                  {isAiSpeaking ? 'AI Speaking' : 'AI Listening'}
+                </span>
               </div>
               <p style={{ position: "absolute", bottom: "1.2rem", color: G.muted, fontSize: "0.82rem" }}>
-                Stream not configured. Running in transcript-only mode.
+                Voice AI Active · Real-time Analysis
               </p>
             </div>
           )}
@@ -640,7 +707,11 @@ export function InterviewScreen({
             />
           )}
 
-          {draft && streamEnabled && <p style={{ fontSize: "0.8rem", color: G.accent, marginTop: "0.55rem" }}>You: {draft.split(" ").slice(-15).join(" ")}...</p>}
+          {draft && streamEnabled && (
+            <div style={{ fontSize: "0.85rem", color: G.accent, marginTop: "0.8rem", maxHeight: "120px", overflowY: "auto", paddingRight: "0.5rem" }}>
+              <strong>You:</strong> {draft}
+            </div>
+          )}
           {livePartial && !streamEnabled && <p style={{ fontSize: "0.8rem", color: G.accent, marginTop: "0.55rem" }}>Listening: {livePartial}</p>}
           
           {transcript && !streamEnabled && (

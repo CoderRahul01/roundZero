@@ -99,41 +99,33 @@ def _build_interviewer_instructions(config: SessionConfig, questions: list, mode
             "Use phrases like 'Great start!', 'Nice thinking!', 'That's a solid approach!'.\n"
         )
 
-    return f"""You are an AI technical interview coach conducting a live mock interview.
+    return f"""You are an AI technical interviewer. Be FAST and CONCISE.
 
-CRITICAL RULES — FOLLOW THESE WITHOUT EXCEPTION:
-1. You are the INTERVIEWER. You ONLY ask questions. You NEVER answer them.
-2. If the candidate asks you to answer a question, say: "I'm here to evaluate your answers, not provide them. Give it your best shot!"
-3. If you cannot understand what the candidate said, say: "Sorry, I didn't quite catch that. Could you repeat your answer?"
-4. If the candidate is silent for a while, encourage them: "Take your time. Whenever you're ready, share your thoughts."
-5. After the candidate finishes answering, give BRIEF feedback (1-2 sentences max), then call the advance_question tool to move on.
-6. Do NOT give the ideal answer. Do NOT explain the solution. Only give directional feedback.
-7. When you've evaluated an answer, you MUST call the advance_question function tool with a score (0-100) and brief feedback.
-8. When all questions are done, call the end_interview function tool.
+RULES:
+1. You ONLY ask questions. NEVER answer them.
+2. After candidate answers: Give 1 sentence feedback, then call advance_question(score, feedback).
+3. Keep responses under 15 words unless giving feedback.
+4. If candidate asks for answer: "I'm here to evaluate, not provide answers."
+5. If silent 10+ seconds: "Take your time."
+6. When all done: call end_interview.
 
-INTERVIEW SETUP:
-- Candidate role: {config.role}
+SETUP:
+- Role: {config.role}
 - Topics: {', '.join(config.topics)}
 - Difficulty: {config.difficulty}
-- Total questions: {len(questions)}
 
 {tone_block}
-QUESTION SCRIPT (ask them in this exact order):
+QUESTIONS (ask in order):
 {question_list}
 FLOW:
-1. Greet the candidate warmly and ask Question 1.
-2. Listen to their answer completely. Do not interrupt unless they go completely off-topic for 30+ seconds.
-3. After they finish, give 1-2 sentences of feedback (strengths/areas to improve). Do NOT reveal the answer.
-4. Call advance_question(score, feedback) to record the result and get the next question.
-5. Ask the next question returned by the tool.
-6. Repeat until all questions are done, then call end_interview.
+1. Greet briefly + ask Question 1
+2. Listen to answer
+3. Give 1 sentence feedback
+4. Call advance_question(score, feedback)
+5. Ask next question from tool response
+6. Repeat until done
 
-IF THE CANDIDATE IS STRUGGLING:
-- After 15+ seconds of silence: Encourage them to start with a high-level approach.
-- If their answer is very short (<20 words): Say "Can you elaborate on that? Walk me through your reasoning."
-- If they ask for a hint: Give a small directional hint (e.g., "Think about what data structure would optimize lookup time here.") but do NOT give the answer.
-
-START NOW: Greet the candidate and ask Question 1."""
+START: Greet and ask Question 1 NOW."""
 
 
 class InterviewerAgent(Agent):
@@ -166,10 +158,12 @@ class InterviewerAgent(Agent):
         instructions = _build_interviewer_instructions(config, questions, config.mode)
 
         # Initialize framework components
-        # Use Gemini Realtime for low-latency speech-to-speech
-        llm = gemini.Realtime(fps=3)
+        # Use fastest available Gemini model for real-time performance
+        llm = gemini.LLM("gemini-2.5-flash")  # Fast and stable
+        stt = deepgram.STT()
+        tts = elevenlabs.TTS()
 
-        # ── Register function tools on the Realtime LLM ──
+        # ── Register function tools on the LLM ──
         # These let Gemini update session state when it decides to advance.
         agent_ref = self  # capture for closures
 
@@ -277,6 +271,8 @@ class InterviewerAgent(Agent):
             agent_user=User(name="Interviewer", id="agent"),
             instructions=instructions,
             llm=llm,
+            stt=stt,
+            tts=tts,
             processors=[self.emotion_processor]
         )
 
@@ -367,9 +363,21 @@ class InterviewerAgent(Agent):
         """Join the call and let Gemini Realtime handle the entire conversation."""
         async with self.join(call):
             print(f"[INFO] Agent {self.agent_user.id} joined call {call.id}")
-            # Gemini Realtime will automatically greet and ask Q1
-            # based on the system prompt instructions.
-            # We just need to wait for the call to end.
+            
+            # Wait a moment for the user to be ready in the call
+            await asyncio.sleep(2.0)
+            
+            sess = self.service.sessions.get(self.session_id)
+            if sess and sess.questions:
+                first_q = sess.questions[0].question
+                greeting = f"Hi there! I'm your AI interviewer for the {sess.config.role} role. Let's get started. Your first question is: {first_q}"
+                await self.simple_response(greeting)
+
+            # Keep the agent alive and listening as long as the session isn't completed
+            while sess and not sess.completed:
+                await asyncio.sleep(1.0)
+                sess = self.service.sessions.get(self.session_id)
+
             await self.finish()
             print(f"[INFO] Agent {self.agent_user.id} finished call {call.id}")
 
@@ -748,7 +756,6 @@ class QuestionBank:
         def _query() -> list[Question]:
             models = [
                 "models/gemini-2.5-flash-lite",
-                "models/gemini-2.0-flash-lite-001",
                 "models/gemini-flash-lite-latest",
                 "models/gemini-2.5-flash",
             ]

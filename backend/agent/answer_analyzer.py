@@ -45,6 +45,7 @@ class AnswerAnalyzer:
         """
         Analyze answer relevance in real-time.
         Runs Claude evaluation and Gemini embeddings concurrently.
+        Optimized with timeout and parallel execution.
         """
         # Rate limit analysis (every 5 seconds)
         current_time = time.time()
@@ -65,14 +66,32 @@ class AnswerAnalyzer:
         self._last_analysis_time = current_time
         analysis_start = time.time()
         
-        # Run analysis tasks concurrently
-        claude_task = self._evaluate_with_claude(question, answer_buffer)
-        embedding_task = self._calculate_semantic_similarity(question, answer_buffer)
-        
-        claude_result, semantic_similarity = await asyncio.gather(
-            claude_task,
-            embedding_task
-        )
+        try:
+            # Run analysis tasks concurrently with timeout
+            claude_task = self._evaluate_with_claude(question, answer_buffer)
+            embedding_task = self._calculate_semantic_similarity(question, answer_buffer)
+            
+            # Use wait_for with timeout for speed
+            results = await asyncio.wait_for(
+                asyncio.gather(claude_task, embedding_task, return_exceptions=True),
+                timeout=2.5  # 2.5 second timeout for real-time performance
+            )
+            
+            claude_result = results[0] if not isinstance(results[0], Exception) else {"is_relevant": True, "confidence": 0.5}
+            semantic_similarity = results[1] if not isinstance(results[1], Exception) else 0.5
+            
+        except asyncio.TimeoutError:
+            # Timeout - assume relevant to avoid false interruptions
+            return AnalysisResult(
+                is_relevant=True,
+                semantic_similarity=0.5,
+                should_interrupt=False,
+                interruption_message=None,
+                confidence=0.0,
+                analysis_duration=2.5,
+                claude_response={},
+                embedding_similarity=0.5
+            )
         
         analysis_duration = time.time() - analysis_start
         
