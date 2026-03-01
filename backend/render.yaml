@@ -1,14 +1,12 @@
 services:
   - type: web
     name: roundzero-backend
-    env: python
+    env: docker
     region: oregon
     plan: free
-    buildCommand: pip install uv && uv sync
-    startCommand: uv run uvicorn main:app --host 0.0.0.0 --port $PORT
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
     healthCheckPath: /health
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.13
-      - key: UV_SYSTEM_PYTHON
-        value: 1
+      - key: PORT
+        value: 8000
