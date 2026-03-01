@@ -6,6 +6,20 @@ FROM python:3.12-slim
 # Set working directory
 WORKDIR /app
 
+# Install system dependencies for PyAV (av package) and other native packages
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswscale-dev \
+    libavdevice-dev \
+    pkg-config \
+    gcc \
+    g++ \
+    make \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install uv
 RUN pip install uv
 
