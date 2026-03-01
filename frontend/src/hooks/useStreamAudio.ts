@@ -273,6 +273,7 @@ export function useStreamAudio(options: UseStreamAudioOptions): UseStreamAudioRe
     return () => {
       cleanup();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streamApiKey, streamToken, userId, callId]);
 
   // Cleanup function
