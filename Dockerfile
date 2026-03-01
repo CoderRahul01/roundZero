@@ -1,41 +1,30 @@
-# Root-level Dockerfile for Railway deployment
-# This builds the backend from the repository root
-# Cache bust: 2026-03-01-v2
+# Production Dockerfile for Railway deployment
+# Optimized for fast builds and small image size (~150MB)
 
 FROM python:3.12-slim
 
-# Set working directory
 WORKDIR /app
 
-# Install system dependencies for PyAV (av package) and other native packages
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    libavcodec-dev \
-    libavformat-dev \
-    libavutil-dev \
-    libswscale-dev \
-    libavdevice-dev \
-    pkg-config \
-    gcc \
-    g++ \
-    make \
-    && rm -rf /var/lib/apt/lists/*
+# Install uv package manager
+RUN pip install --no-cache-dir uv
 
-# Install uv and Cython (required for PyAV)
-RUN pip install uv cython
+# Copy dependency files
+COPY backend/pyproject.toml backend/uv.lock ./
 
-# Copy backend dependency files
-COPY backend/pyproject.toml ./
-COPY backend/uv.lock ./
-
-# Install dependencies (with vision extras for production)
+# Install dependencies with vision extras
+# UV_LINK_MODE=copy ensures proper file handling in containers
+ENV UV_LINK_MODE=copy
 RUN uv sync --frozen --extra vision
 
-# Copy entire backend application
+# Copy application code
 COPY backend/ ./
 
-# Expose port
+# Expose port (Railway will inject $PORT)
 EXPOSE 8000
 
-# Start command (Railway will override with $PORT)
-CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+
+# Start FastAPI server
+CMD ["sh", "-c", "uv run uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
