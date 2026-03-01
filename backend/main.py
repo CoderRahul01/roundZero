@@ -21,6 +21,8 @@ from agent.interviewer import SessionConfig, get_interviewer_service, Interviewe
 from middleware import JWTAuthMiddleware, get_current_user
 from rate_limit import RateLimiter
 from settings import Settings, get_settings
+from logger import setup_mongo_logging
+from routes.realtime_voice import router as realtime_voice_router
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
@@ -32,8 +34,34 @@ logging.basicConfig(
 logger = logging.getLogger("roundzero.api")
 
 app = FastAPI(title="RoundZero AI Backend", version="1.0.0", docs_url="/docs", redoc_url=None)
-service = get_interviewer_service()
 
+# Include routers
+app.include_router(realtime_voice_router)
+
+# Initialized during startup to avoid blocking on import
+service = None
+mongo_log_handler = None
+
+@app.on_event("startup")
+async def startup_event():
+    global service, mongo_log_handler
+    # Initialize the interviewer service in the event loop, not at module level
+    logger.info("Initializing InterviewerService...")
+    service = get_interviewer_service()
+    logger.info("InterviewerService initialized.")
+
+    if settings.mongodb_uri:
+        logger.info("Setting up MongoDB centralized logging...")
+        mongo_log_handler = setup_mongo_logging(settings.mongodb_uri, "RoundZero")
+        mongo_log_handler.start_worker()
+        logger.info("MongoDB logging active.")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global mongo_log_handler
+    if mongo_log_handler:
+        logger.info("Shutting down MongoDB centralized logging...")
+        await mongo_log_handler.stop_worker()
 
 def _missing_env(keys: list[str]) -> list[str]:
     return [key for key in keys if not os.getenv(key)]

@@ -1,0 +1,30 @@
+[build]
+builder = "NIXPACKS"
+buildCommand = "cd backend && uv sync --frozen"
+
+[deploy]
+startCommand = "cd backend && uv run uvicorn main:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/health"
+healthcheckTimeout = 100
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+[env]
+# Free Tier Configuration
+USE_FREE_TIER = "true"
+ENVIRONMENT = "production"
+
+# Python Configuration
+PYTHONUNBUFFERED = "1"
+PYTHON_VERSION = "3.13"
+
+# Logging
+LOG_LEVEL = "info"
+
+# CORS (Update with your Vercel domain)
+CORS_ORIGINS = "https://your-app.vercel.app,http://localhost:3000"
+CORS_ALLOW_CREDENTIALS = "true"
+
+# Rate Limiting
+RATE_LIMIT_MAX = "10"
+RATE_LIMIT_WINDOW_SECONDS = "60"

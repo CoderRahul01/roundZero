@@ -162,6 +162,14 @@ export function InterviewScreen({
   }, []);
 
   useEffect(() => {
+    // If stream is enabled, we use Stream WebRTC for audio capture.
+    // The browser SpeechRecognition API will cause a conflict and throw an error.
+    if (streamEnabled) {
+      setMicSupported(false);
+      setRecognitionReady(false);
+      return;
+    }
+
     const Recognition = getRecognitionCtor();
     if (!Recognition) {
       setMicSupported(false);
@@ -223,7 +231,7 @@ export function InterviewScreen({
       recognitionRef.current = null;
       setRecognitionReady(false);
     };
-  }, []);
+  }, [streamEnabled]);
 
   useEffect(() => {
     let es: EventSource | null = null;
@@ -262,16 +270,43 @@ export function InterviewScreen({
             setIsAiSpeaking(false);
             
             // Sync question state if the agent is asking a new question
-            if (data.is_question && data.text.includes("Next question")) {
-                const parts = data.text.split("Next question.");
-                if (parts.length > 1) {
-                    setQuestion(parts[1].trim());
-                }
-            }
+            // We now broadcast explicit "next_question" and "question_scored" events
+            // but keep this for standard agent messages if they have question index
             if (data.question_index !== undefined) {
-                setQuestionIndex(data.question_index + 1);
+                setQuestionIndex(data.question_index);
             }
           }
+        });
+
+        es.addEventListener("next_question", (e: any) => {
+          if (!mounted) return;
+          const data = JSON.parse(e.data);
+          console.log("SSE [next_question]:", data);
+          if (data.question) {
+            setQuestion(data.question);
+            setQuestionIndex(data.question_index);
+          }
+        });
+
+        es.addEventListener("question_scored", (e: any) => {
+          if (!mounted) return;
+          const data = JSON.parse(e.data);
+          console.log("SSE [question_scored]:", data);
+          // Optional: Display score briefly if desired
+        });
+
+        es.addEventListener("interrupt", (e: any) => {
+          if (!mounted) return;
+          const data = JSON.parse(e.data);
+          console.log("SSE [interrupt]:", data);
+          setAiMsg(data.spoken);
+          setIsAiSpeaking(false);
+        });
+
+        es.addEventListener("interview_complete", (e: any) => {
+          if (!mounted) return;
+          console.log("SSE [interview_complete]:", e.data);
+          onEnd();
         });
 
         es.addEventListener("vision", (e: any) => {
@@ -299,7 +334,7 @@ export function InterviewScreen({
       mounted = false;
       es?.close();
     };
-  }, [config.session_id]);
+  }, [config.session_id, onEnd]);
 
   const speakText = useCallback(
     (text: string) => {
@@ -413,7 +448,7 @@ export function InterviewScreen({
       let dataArray: Uint8Array | null = null;
       if (analyser) {
         dataArray = new Uint8Array(analyser.frequencyBinCount);
-        analyser.getByteFrequencyData(dataArray);
+        analyser.getByteFrequencyData(dataArray as any);
       }
 
       for (let i = 0; i < bars; i += 1) {
@@ -574,36 +609,48 @@ export function InterviewScreen({
 
         <div style={{ background: G.surface, border: `1px solid ${G.border}`, padding: "1rem 1.5rem", display: "flex", alignItems: "center", gap: "0.8rem" }}>
           <canvas ref={canvasRef} width={300} height={40} style={{ flex: 1 }} />
-          <button onClick={toggleMic} disabled={!micSupported} style={{ padding: "0 1rem", height: 40, background: isListening ? "rgba(110,231,183,0.15)" : G.surface2, border: `1px solid ${isListening ? G.accent : G.border}`, color: isListening ? G.accent : G.muted, fontFamily: G.font, fontSize: "0.8rem", cursor: micSupported ? "pointer" : "not-allowed", opacity: micSupported ? 1 : 0.5 }}>
-            {isListening ? "Stop Mic" : "Start Mic"}
-          </button>
-          <button onClick={handleSubmitAnswer} disabled={!draft.trim() || isSubmitting} style={{ padding: "0 1.2rem", height: 40, background: !draft.trim() || isSubmitting ? G.surface2 : "rgba(110,231,183,0.12)", border: `1px solid ${!draft.trim() || isSubmitting ? G.border : G.accent}`, color: !draft.trim() || isSubmitting ? G.muted : G.accent, fontFamily: G.font, fontSize: "0.82rem", cursor: !draft.trim() || isSubmitting ? "not-allowed" : "pointer" }}>
-            {isSubmitting ? "Analyzing..." : "Submit Answer"}
-          </button>
+          {!streamEnabled && (
+            <button onClick={toggleMic} disabled={!micSupported} style={{ padding: "0 1rem", height: 40, background: isListening ? "rgba(110,231,183,0.15)" : G.surface2, border: `1px solid ${isListening ? G.accent : G.border}`, color: isListening ? G.accent : G.muted, fontFamily: G.font, fontSize: "0.8rem", cursor: micSupported ? "pointer" : "not-allowed", opacity: micSupported ? 1 : 0.5 }}>
+              {isListening ? "Stop Mic" : "Start Mic"}
+            </button>
+          )}
+          {!streamEnabled && (
+            <button onClick={handleSubmitAnswer} disabled={!draft.trim() || isSubmitting} style={{ padding: "0 1.2rem", height: 40, background: !draft.trim() || isSubmitting ? G.surface2 : "rgba(110,231,183,0.12)", border: `1px solid ${!draft.trim() || isSubmitting ? G.border : G.accent}`, color: !draft.trim() || isSubmitting ? G.muted : G.accent, fontFamily: G.font, fontSize: "0.82rem", cursor: !draft.trim() || isSubmitting ? "not-allowed" : "pointer" }}>
+              {isSubmitting ? "Analyzing..." : "Submit Answer"}
+            </button>
+          )}
         </div>
 
         <div style={{ background: G.surface2, border: `1px solid ${G.border}`, padding: "1rem 1.2rem" }}>
           <div style={{ fontFamily: G.mono, fontSize: "0.65rem", color: G.muted, marginBottom: "0.5rem", textTransform: "uppercase", letterSpacing: "0.08em" }}>
             Live Transcript
           </div>
-          <textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            rows={5}
-            placeholder="Start mic to transcribe, or type manually. Include constraints, trade-offs, and decisions."
-            style={{ width: "100%", resize: "vertical", background: G.surface, color: G.text, border: `1px solid ${G.border}`, fontFamily: G.font, fontSize: "0.9rem", padding: "0.8rem", outline: "none" }}
-          />
-          {livePartial && <p style={{ fontSize: "0.8rem", color: G.accent, marginTop: "0.55rem" }}>Listening: {livePartial}</p>}
-          {transcript && (
+          
+          {streamEnabled ? (
+            <div style={{ padding: "1.5rem", textAlign: "center", color: G.muted, fontSize: "0.85rem", border: `1px dashed ${G.border}` }}>
+              The Interviewer Agent is listening via your microphone. <br/>Speak naturally to answer questions.
+            </div>
+          ) : (
+            <textarea
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              rows={5}
+              placeholder="Start mic to transcribe, or type manually. Include constraints, trade-offs, and decisions."
+              style={{ width: "100%", resize: "vertical", background: G.surface, color: G.text, border: `1px solid ${G.border}`, fontFamily: G.font, fontSize: "0.9rem", padding: "0.8rem", outline: "none" }}
+            />
+          )}
+
+          {draft && streamEnabled && <p style={{ fontSize: "0.8rem", color: G.accent, marginTop: "0.55rem" }}>You: {draft.split(" ").slice(-15).join(" ")}...</p>}
+          {livePartial && !streamEnabled && <p style={{ fontSize: "0.8rem", color: G.accent, marginTop: "0.55rem" }}>Listening: {livePartial}</p>}
+          
+          {transcript && !streamEnabled && (
             <p style={{ fontSize: "0.78rem", color: G.muted, marginTop: "0.55rem" }}>
               Last submitted: {transcript.slice(0, 180)}{transcript.length > 180 ? "..." : ""}
             </p>
           )}
-          {micError && (
+          {micError && !streamEnabled && (
             <p style={{ marginTop: "0.55rem", color: G.accent3, fontSize: "0.78rem" }}>
-              {micError.includes("network") 
-                ? "Browser mic encountered a network issue, but AI Voice mode is active via Stream." 
-                : micError}
+              {micError}
             </p>
           )}
           {error && <p style={{ marginTop: "0.55rem", color: G.accent3, fontSize: "0.78rem" }}>{error}</p>}

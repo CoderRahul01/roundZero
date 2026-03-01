@@ -20,7 +20,16 @@ from settings import Settings, get_settings
 settings = get_settings()
 logger = logging.getLogger("roundzero.agent")
 
-Action = Literal["CONTINUE", "NEXT", "HINT", "ENCOURAGE"]
+Action = Literal["CONTINUE", "NEXT", "HINT", "ENCOURAGE", "INTERRUPT"]
+
+# Natural interrupt phrases the AI uses — rotated to feel human
+_INTERRUPT_PHRASES = [
+    "Hey, sorry to cut in —",
+    "Sorry to interrupt, but —",
+    "Just to jump in quickly —",
+    "Can I pause you there for a sec —",
+    "I'll stop you right there —",
+]
 
 try:
     from google import genai
@@ -67,10 +76,71 @@ if Agent is None:  # pragma: no cover - optional dependency path
             raise RuntimeError("vision-agents is not installed; set USE_VISION=false or install the package.")
 
 
+def _build_interviewer_instructions(config: SessionConfig, questions: list, mode: str = "buddy") -> str:
+    """Build strict interviewer system prompt with embedded questions.
+    
+    This prompt shapes the Gemini Realtime LLM's behavior so it ONLY
+    asks questions (never answers them) and follows the question script.
+    """
+    question_list = ""
+    for i, q in enumerate(questions, 1):
+        q_text = q.question if hasattr(q, 'question') else str(q)
+        question_list += f"  {i}. {q_text}\n"
+
+    tone_block = ""
+    if mode == "strict":
+        tone_block = (
+            "Tone: Professional and direct. Keep feedback concise.\n"
+            "Do NOT use casual language, emojis, or filler. Be formal but fair.\n"
+        )
+    else:
+        tone_block = (
+            "Tone: Friendly but professional. Be encouraging and supportive.\n"
+            "Use phrases like 'Great start!', 'Nice thinking!', 'That's a solid approach!'.\n"
+        )
+
+    return f"""You are an AI technical interview coach conducting a live mock interview.
+
+CRITICAL RULES — FOLLOW THESE WITHOUT EXCEPTION:
+1. You are the INTERVIEWER. You ONLY ask questions. You NEVER answer them.
+2. If the candidate asks you to answer a question, say: "I'm here to evaluate your answers, not provide them. Give it your best shot!"
+3. If you cannot understand what the candidate said, say: "Sorry, I didn't quite catch that. Could you repeat your answer?"
+4. If the candidate is silent for a while, encourage them: "Take your time. Whenever you're ready, share your thoughts."
+5. After the candidate finishes answering, give BRIEF feedback (1-2 sentences max), then call the advance_question tool to move on.
+6. Do NOT give the ideal answer. Do NOT explain the solution. Only give directional feedback.
+7. When you've evaluated an answer, you MUST call the advance_question function tool with a score (0-100) and brief feedback.
+8. When all questions are done, call the end_interview function tool.
+
+INTERVIEW SETUP:
+- Candidate role: {config.role}
+- Topics: {', '.join(config.topics)}
+- Difficulty: {config.difficulty}
+- Total questions: {len(questions)}
+
+{tone_block}
+QUESTION SCRIPT (ask them in this exact order):
+{question_list}
+FLOW:
+1. Greet the candidate warmly and ask Question 1.
+2. Listen to their answer completely. Do not interrupt unless they go completely off-topic for 30+ seconds.
+3. After they finish, give 1-2 sentences of feedback (strengths/areas to improve). Do NOT reveal the answer.
+4. Call advance_question(score, feedback) to record the result and get the next question.
+5. Ask the next question returned by the tool.
+6. Repeat until all questions are done, then call end_interview.
+
+IF THE CANDIDATE IS STRUGGLING:
+- After 15+ seconds of silence: Encourage them to start with a high-level approach.
+- If their answer is very short (<20 words): Say "Can you elaborate on that? Walk me through your reasoning."
+- If they ask for a hint: Give a small directional hint (e.g., "Think about what data structure would optimize lookup time here.") but do NOT give the answer.
+
+START NOW: Greet the candidate and ask Question 1."""
+
+
 class InterviewerAgent(Agent):
     """
     Real-time AI Interviewer using the Vision Agents framework.
-    Orchestrates STT, TTS, LLM, and Video processing.
+    Uses Gemini Realtime (speech-to-speech) with function tools
+    to manage interview flow entirely through the LLM.
     """
     def __init__(self, session_id: str, config: SessionConfig, service: InterviewerService):
         missing = []
@@ -90,9 +160,114 @@ class InterviewerAgent(Agent):
         self.last_transcript_time = time.time()
         self.is_speaking = False
 
+        # Build strict interviewer system prompt with all questions embedded
+        session = self.service.sessions.get(self.session_id)
+        questions = session.questions if session else []
+        instructions = _build_interviewer_instructions(config, questions, config.mode)
+
         # Initialize framework components
         # Use Gemini Realtime for low-latency speech-to-speech
         llm = gemini.Realtime(fps=3)
+
+        # ── Register function tools on the Realtime LLM ──
+        # These let Gemini update session state when it decides to advance.
+        agent_ref = self  # capture for closures
+
+        @llm.register_function(
+            description=(
+                "Call this after evaluating the candidate's answer to record the score "
+                "and advance to the next interview question. Returns the next question text "
+                "or a completion message if the interview is done."
+            )
+        )
+        async def advance_question(score: int, feedback: str) -> str:
+            """Advance to the next question. Score is 0-100."""
+            sess = agent_ref.service.sessions.get(agent_ref.session_id)
+            if not sess or sess.completed:
+                return "Interview is already completed."
+            
+            clamped_score = _clamp(score, 0, 100)
+            current_q = sess.questions[sess.current_q_idx]
+            
+            # Analyze the answer buffer for stats
+            fillers = agent_ref.service.speech.analyze(sess.answer_buffer)
+            emotion = agent_ref.service.emotion.infer_emotion(sess.answer_buffer)
+            confidence = agent_ref.service.emotion.infer_confidence(
+                sess.answer_buffer, filler_count=fillers
+            )
+            
+            # Save the question result
+            result = QuestionResult(
+                question_id=current_q.id,
+                question_text=current_q.question,
+                user_answer=sess.answer_buffer.strip(),
+                score=clamped_score,
+                confidence=confidence,
+                emotion=emotion,
+                fillers=fillers,
+                feedback=feedback,
+                created_at=time.time(),
+            )
+            sess.question_results.append(result)
+            await agent_ref.service.db.insert_question_result(sess.id, result)
+            
+            # Broadcast to frontend
+            await agent_ref.service.broadcast(agent_ref.session_id, {
+                "type": "question_scored",
+                "question_index": sess.current_q_idx + 1,
+                "score": clamped_score,
+                "feedback": feedback,
+                "stats": {
+                    "fillers": sess.total_fillers,
+                    "confidence": confidence,
+                    "emotion": emotion,
+                },
+            })
+            
+            # Clear buffer and advance
+            sess.answer_buffer = ""
+            sess.current_q_idx += 1
+            
+            if sess.current_q_idx >= len(sess.questions):
+                # All questions done — tell the LLM to wrap up
+                return "All questions completed. Please call end_interview to finish."
+            
+            next_q = sess.questions[sess.current_q_idx]
+            
+            # Broadcast new question to frontend
+            await agent_ref.service.broadcast(agent_ref.session_id, {
+                "type": "next_question",
+                "question": next_q.question,
+                "question_index": sess.current_q_idx + 1,
+                "total_questions": len(sess.questions),
+            })
+            
+            return f"Next question ({sess.current_q_idx + 1}/{len(sess.questions)}): {next_q.question}"
+
+        @llm.register_function(
+            description=(
+                "Call this when all interview questions have been asked and answered "
+                "to finalize the session and generate the report."
+            )
+        )
+        async def end_interview(summary: str) -> str:
+            """End the interview session."""
+            sess = agent_ref.service.sessions.get(agent_ref.session_id)
+            if not sess:
+                return "Session not found."
+            if sess.completed:
+                return "Interview already completed."
+            
+            await agent_ref.service._finalize_session(sess)
+            
+            # Broadcast completion to frontend
+            await agent_ref.service.broadcast(agent_ref.session_id, {
+                "type": "interview_complete",
+                "session_id": agent_ref.session_id,
+                "summary": summary,
+            })
+            
+            return "Interview completed successfully. The candidate's report is now available."
 
         # Vision Processor
         self.emotion_processor = VisionEmotionProcessor()
@@ -100,14 +275,12 @@ class InterviewerAgent(Agent):
         super().__init__(
             edge=getstream.Edge(),
             agent_user=User(name="Interviewer", id="agent"),
-            instructions=service.decision_engine.system_prompt,
+            instructions=instructions,
             llm=llm,
             processors=[self.emotion_processor]
         )
-        self.is_processing_decision = False
 
         # Register agent with the session state for cross-module access
-        session = self.service.sessions.get(self.session_id)
         if session:
             session.agent = self
 
@@ -133,12 +306,12 @@ class InterviewerAgent(Agent):
             self.last_transcript_time = time.time()
             self.is_speaking = False
             
-            session = self.service.sessions.get(self.session_id)
-            if not session:
+            sess = self.service.sessions.get(self.session_id)
+            if not sess:
                 return
 
             # Accumulate transcript into session buffer
-            session.answer_buffer += f" {text}"
+            sess.answer_buffer += f" {text}"
             
             # Broadcast user's transcript to frontend
             await self.service.broadcast(self.session_id, {
@@ -148,113 +321,55 @@ class InterviewerAgent(Agent):
             })
 
             # Real-time filler analysis
-            fillers = self.service.speech.analyze(text)
-            session.total_fillers += fillers
+            fillers_count = self.service.speech.analyze(text)
+            sess.total_fillers += fillers_count
 
         @self.events.subscribe
         async def on_vision_result(event: VLMInferenceCompletedEvent):
             """Update local video stats when processor emits results."""
-            # VLM events use plugin_name to identify the source
             if event.plugin_name == self.emotion_processor.name:
                 logger.info(f"👁️ Vision analysis: {event.text}")
-                # Update last_vid_stats and broadcast
                 await self.service.broadcast(self.session_id, {
                     "type": "vision",
                     "stats": self.last_vid_stats
                 })
 
     async def simple_response(self, text: str, participant: Any = None) -> None:
-        """Override simple_response to broadcast agent messages."""
-        # Detect if this is a new question being asked by looking for typical patterns
-        is_question = "?" in text or "Next question" in text or "Question" in text
+        """Override simple_response to broadcast agent messages to SSE."""
+        is_question = "?" in text
         
-        # Broadcast the intent/message before or as it's spoken
         event_data = {
             "type": "agent_message",
             "text": text,
             "is_question": is_question
         }
         
-        # If it's a question, try to find the index if possible
         session = self.service.sessions.get(self.session_id)
-        if session and is_question:
-            event_data["question_index"] = session.current_q_idx
+        if session:
+            event_data["question_index"] = session.current_q_idx + 1
+            event_data["total_questions"] = len(session.questions)
 
         await self.service.broadcast(self.session_id, event_data)
         
-        # Use super().simple_response to speak the text
         await super().simple_response(text)
-        self.is_speaking = False # Reset flag after speaking
+        self.is_speaking = False
 
     async def join_session_call(self, call_id: str, call_type: str = "default"):
         """Join the Stream call as an agent participant."""
         try:
-            # 1. Create agent user if not exists (required for server-side auth)
             await self.create_user()
-
-            # 2. Create the call - this will get or create it on Stream
             call = await self.create_call(call_type, call_id)
-            # We run this in a background task so it doesn't block the caller
             asyncio.create_task(self._run_agent_loop(call))
-            # Start the proactive checker
-            asyncio.create_task(self._proactive_monitor(call))
-
         except Exception as e:
             print(f"[ERROR] Agent failed to join call {call_id}: {e}")
 
-    async def _proactive_monitor(self, call: Any):
-        """Monitor for silence and trigger decisions or encouragement."""
-        while not self.is_closed:
-            await asyncio.sleep(2) # Granular check every 2 seconds
-            now = time.time()
-            silence_duration = now - self.last_transcript_time
-            
-            # 1. Trigger full decision if there's enough silence and an answer buffer
-            if silence_duration > 6 and not self.is_speaking and not self.is_processing_decision:
-                session = self.service.sessions.get(self.session_id)
-                if session and len(session.answer_buffer.strip()) > 10 and not session.completed:
-                    self.is_processing_decision = True
-                    print(f"[PROACTIVE] Silence detected ({silence_duration:.1f}s). Triggering decision for {self.session_id}")
-                    try:
-                        # Directly call submit_answer with empty transcript to process buffer
-                        # We pass an empty string because the buffer is already in session.answer_buffer
-                        # and submit_answer will append it.
-                        await self.service.submit_answer(self.session_id, transcript="")
-                        # Reset transcript time so we don't trigger again immediately
-                        self.last_transcript_time = time.time()
-                    except Exception as e:
-                        print(f"[ERROR] Proactive decision failed: {e}")
-                    finally:
-                        self.is_processing_decision = False
-            
-            # 2. Trigger encouragement if there's even longer silence and no buffer
-            elif silence_duration > 20 and not self.is_speaking and not self.is_processing_decision:
-                session = self.service.sessions.get(self.session_id)
-                if session and not session.completed:
-                    print(f"[PROACTIVE] Long silence detected ({silence_duration:.1f}s). Encouraging candidate.")
-                    self.is_processing_decision = True
-                    try:
-                        await self.simple_response(
-                            "I'm still here. Whenever you're ready, please share your thoughts on the question."
-                        )
-                        self.last_transcript_time = time.time()
-                    finally:
-                        self.is_processing_decision = False
-
-
     async def _run_agent_loop(self, call: Any):
+        """Join the call and let Gemini Realtime handle the entire conversation."""
         async with self.join(call):
-            # The agent is now active in the call
             print(f"[INFO] Agent {self.agent_user.id} joined call {call.id}")
-            
-            # Speak the first question now that we are fully joined in the call
-            session = self.service.sessions.get(self.session_id)
-            if session and session.questions:
-                first_q = session.questions[0].question
-                greeting = f"Hello! I'm your {self.session_config.mode} interview coach. Let's get started. {first_q}"
-                await self.simple_response(greeting)
-
-            # The agent will now process transcripts and video frames via event handlers
+            # Gemini Realtime will automatically greet and ask Q1
+            # based on the system prompt instructions.
+            # We just need to wait for the call to end.
             await self.finish()
             print(f"[INFO] Agent {self.agent_user.id} finished call {call.id}")
 
@@ -421,7 +536,7 @@ class VisionEmotionProcessor(VideoProcessor):
 
 class QuestionBank:
     def __init__(self) -> None:
-        self._questions = self._load_local_questions()
+        self._questions = None
         self._pinecone_index = None
         self._llm_client = None
         self._genai_client = None
@@ -430,7 +545,10 @@ class QuestionBank:
         self._try_enable_pinecone()
         self._try_enable_mongodb()
 
-    def _load_local_questions(self) -> list[Question]:
+    def _get_local_questions(self) -> list[Question]:
+        if self._questions is not None:
+            return self._questions
+            
         if not QUESTION_STORE_PATH.exists():
             return [
                 Question(
@@ -811,7 +929,8 @@ class QuestionBank:
     def _fetch_from_local(
         self, role: str, topics: list[str], difficulty: str, n: int
     ) -> list[Question]:
-        if not self._questions:
+        qs = self._get_local_questions()
+        if not qs:
             return []
 
         role_terms = {term.lower() for term in re.findall(r"[a-zA-Z]+", role)}
@@ -831,7 +950,7 @@ class QuestionBank:
             diff_bonus = 2 if question.difficulty in preferred else 0
             return (topic_hits * 4 + role_hits * 2 + diff_bonus, len(question.question))
 
-        ranked = sorted(self._questions, key=_score, reverse=True)
+        ranked = sorted(qs, key=_score, reverse=True)
         selected: list[Question] = []
         seen: set[str] = set()
         for question in ranked:
@@ -984,16 +1103,25 @@ class DecisionEngine:
         ideal_answer: str = "",
     ) -> tuple[Action, str, int | None] | None:
         prompt = (
-            "You are an expert interview coach. Evaluate the candidate's answer and decide the next action. "
-            "Return valid JSON: {\"action\":\"CONTINUE|NEXT|HINT|ENCOURAGE\",\"message\":\"...\",\"score\":0-100}.\n"
+            "You are an expert interview coach evaluating a LIVE candidate answer. "
+            "Return ONLY valid JSON with these fields: "
+            '{"action":"CONTINUE|NEXT|HINT|ENCOURAGE|INTERRUPT","message":"...","score":0-100}\n\n'
             f"Mode: {mode}\n"
             f"Question: {question}\n"
-            f"Ideal Answer: {ideal_answer}\n"
-            f"Candidate Answer: {answer}\n"
-            f"Candidate Confidence: {confidence}\n"
-            f"Filler Word Count: {fillers}\n"
-            "If action is NEXT, provide a score from 0 to 100 based on the answer quality compared to the ideal answer. "
-            "If action is CONTINUE/HINT/ENCOURAGE, score can be null or 0."
+            f"Ideal Answer Outline: {ideal_answer}\n"
+            f"Candidate Answer So Far: {answer}\n"
+            f"Candidate Confidence Level: {confidence}%\n"
+            f"Filler Word Count: {fillers}\n\n"
+            "Action decision rules:\n"
+            "- CONTINUE: candidate is on the right track but hasn't finished\n"
+            "- NEXT: answer is complete and good enough — move to next question\n"
+            "- HINT: candidate is struggling — give a gentle nudge toward the right direction\n"
+            "- ENCOURAGE: very short or low-confidence answer — motivate them to elaborate\n"
+            "- INTERRUPT: candidate is clearly going off-topic, repeating themselves, or spending "
+            "100+ words on a tangent that doesn't address the question at all. "
+            "Your message for INTERRUPT must be a short, polite clarifying question that steers "
+            "them back (e.g. 'Could you tie that back to how it relates to the question about X?'). "
+            "If action is NEXT, include a score 0-100. Otherwise score can be null."
         )
         try:
             event = await self._llm.simple_response(prompt)
@@ -1004,7 +1132,7 @@ class DecisionEngine:
             action = payload.get("action", "CONTINUE").upper()
             message = str(payload.get("message") or "")
             score = payload.get("score")
-            if action not in {"CONTINUE", "NEXT", "HINT", "ENCOURAGE"}:
+            if action not in {"CONTINUE", "NEXT", "HINT", "ENCOURAGE", "INTERRUPT"}:
                 return None
             return action, message, int(score) if score is not None else None
         except Exception:
@@ -1035,6 +1163,10 @@ class DecisionEngine:
                 return "HINT", "Too short. Clarify your architecture and trade-offs."
             return "ENCOURAGE", "Good start. Add more detail on your reasoning and trade-offs."
 
+        # Interrupt when the answer is very long and filler-heavy (rambling)
+        if count >= 150 and fillers >= max(5, count // 10):
+            return "INTERRUPT", "Could you tie this back to the original question more directly?"
+
         if fillers >= max(3, count // 14):
             if mode == "strict":
                 return "HINT", "Slow down and remove filler words. Structure the answer in clear steps."
@@ -1049,6 +1181,7 @@ class DecisionEngine:
             return "NEXT", "Great explanation. Let's move to the next question."
 
         return "CONTINUE", "Continue your answer and include edge cases."
+
 
 
 class NeonDatabase:
