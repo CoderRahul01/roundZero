@@ -120,9 +120,9 @@ class AuthTokenVerifier:
                 header = jwt.get_unverified_header(token)
                 unverified_payload = jwt.decode(token, options={"verify_signature": False})
                 logger.info("DEBUG AUTH: Token KID: %s", header.get("kid"))
-                logger.info("DEBUG AUTH: Token Payload: %s", unverified_payload)
-                logger.info("DEBUG AUTH: Expected ISS Variants: %s", issuers)
-                logger.info("DEBUG AUTH: Expected AUD Variants: %s", audiences)
+                logger.info(f"DEBUG AUTH: Token Payload: {unverified_payload}")
+                logger.info(f"DEBUG AUTH: Expected Issuer: {issuers}")
+                logger.info(f"DEBUG AUTH: Expected Audience: {audiences}")
                 
                 return _decode_neon_jwt(token, signing_key, audiences, issuers)
             except Exception as exc:
