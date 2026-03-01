@@ -25,5 +25,6 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
   CMD python -c "import urllib.request, os; urllib.request.urlopen(f'http://localhost:{os.environ.get(\"PORT\", 8000)}/health')"
 
-# Start FastAPI server
-CMD ["uv", "run", "python", "run.py"]
+# Ensure dependencies are synced and start FastAPI server
+# Using ENTRYPOINT with sh -c to actively ignore any broken Dashboard UI start commands (like `cd backend...`) passed by Railway.
+ENTRYPOINT ["sh", "-c", "uv sync --frozen --extra vision && uv run python run.py"]
