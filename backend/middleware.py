@@ -114,7 +114,20 @@ class AuthTokenVerifier:
 
             audiences = _audience_variants(self._config.neon_auth_audience)
             issuers = _issuer_variants(self._config.neon_auth_issuer)
-            return _decode_neon_jwt(token, signing_key, audiences, issuers)
+            
+            try:
+                # Add diagnostic logging for verification params
+                header = jwt.get_unverified_header(token)
+                unverified_payload = jwt.decode(token, options={"verify_signature": False})
+                logger.info("DEBUG AUTH: Token KID: %s", header.get("kid"))
+                logger.info("DEBUG AUTH: Token Payload: %s", unverified_payload)
+                logger.info("DEBUG AUTH: Expected ISS Variants: %s", issuers)
+                logger.info("DEBUG AUTH: Expected AUD Variants: %s", audiences)
+                
+                return _decode_neon_jwt(token, signing_key, audiences, issuers)
+            except Exception as exc:
+                logger.error("DEBUG AUTH: Verification failed: %s", exc)
+                raise
 
         if not self._config.allow_legacy_hs256_auth:
             raise jwt.InvalidTokenError(

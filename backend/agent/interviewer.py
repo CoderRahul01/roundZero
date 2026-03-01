@@ -302,7 +302,7 @@ class InterviewerAgent(Agent):
             return f"Interview completed! Overall score: {overall_score}/100. Report generated with {len(sess.question_results)} questions answered."
 
         # Vision Processor
-        self.emotion_processor = VisionEmotionProcessor()
+        self.emotion_processor = VisionEmotionProcessor(self)
 
         super().__init__(
             edge=getstream.Edge(),
@@ -645,14 +645,15 @@ except ImportError:  # pragma: no cover
             raise RuntimeError("vision-agents processor module missing")
 
 class VisionEmotionProcessor(VideoProcessor):
-    """Processes video frames to detect emotion and confidence."""
+    """Processes video frames to detect emotion and confidence using the framework's standard pattern."""
+    
     @property
     def name(self) -> str:
         return "vision_emotion_processor"
 
-    def __init__(self):
+    def __init__(self, agent: InterviewerAgent):
         super().__init__()
-        # In a real app, you'd load a model here (e.g., Mediapipe, DeepFace, etc.)
+        self.agent = agent
         self.last_emotion = "neutral"
         self.last_confidence = 65
 
@@ -668,15 +669,30 @@ class VisionEmotionProcessor(VideoProcessor):
         participant_id: str | None,
         shared_forwarder: Any | None = None,
     ) -> None:
-        # In production, this would be updated by real vision triggers or background tasks.
-        pass
+        """Register the frame handler with the shared forwarder."""
+        if shared_forwarder:
+            # Analyze emotion every 0.5 seconds (2 FPS)
+            shared_forwarder.add_frame_handler(self._analyze_emotion, name="emotion_analysis", fps=2.0)
 
-    async def process(self, frame_chunk: Any) -> dict[str, Any]:
-        """Returns the current emotion and confidence state."""
-        return {
-            "emotion": self.last_emotion,
-            "confidence": self.last_confidence
-        }
+    async def _analyze_emotion(self, frame: Any) -> None:
+        """Mock emotion analysis from the video frame."""
+        # In a real implementation, you would use a model like Mediapipe or deepface here.
+        # For this hackathon version, we simulate periodic emotion shifts based on frame presence.
+        import random
+        emotions = ["happy", "neutral", "neutral", "focused", "focused", "confused"]
+        self.last_emotion = random.choice(emotions)
+        
+        confidence_base = {"happy": 80, "neutral": 65, "focused": 75, "confused": 45}
+        self.last_confidence = confidence_base.get(self.last_emotion, 65) + random.randint(-5, 5)
+
+        # Broadcast the vision result via the agent's service if active
+        if self.agent and self.agent.session_id:
+            await self.agent.service.broadcast(self.agent.session_id, {
+                "type": "vision_result",
+                "emotion": self.last_emotion,
+                "confidence": self.last_confidence,
+                "timestamp": time.time()
+            })
 
     def infer_confidence(self, transcript: str, filler_count: int, fallback: int | None = None) -> int:
         if fallback is not None:

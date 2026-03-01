@@ -7,6 +7,7 @@ Redis-based caching for TTS audio to reduce API calls and improve performance.
 import hashlib
 import logging
 import time
+import base64
 from typing import Optional
 from upstash_redis import Redis
 import os
@@ -97,6 +98,13 @@ class TTSCacheService:
                 logger.info(f"TTS cache hit for: {text[:50]}...")
                 # Update access time for LRU
                 self.redis.expire(cache_key, self._get_ttl(text))
+                
+                # Decode if it's a string (base64)
+                if isinstance(cached_data, str):
+                    try:
+                        return base64.b64decode(cached_data)
+                    except Exception:
+                        return cached_data.encode() # Fallback
                 return cached_data
             
             logger.debug(f"TTS cache miss for: {text[:50]}...")
@@ -128,8 +136,9 @@ class TTSCacheService:
                 logger.warning(f"Audio too large to cache: {audio_size_mb:.2f}MB")
                 return False
             
-            # Store with TTL
-            self.redis.setex(cache_key, ttl, audio_data)
+            # Store with TTL, encode to base64 to avoid JSON serialization errors with REST client
+            encoded_audio = base64.b64encode(audio_data).decode('utf-8')
+            self.redis.setex(cache_key, ttl, encoded_audio)
             
             logger.info(f"Cached TTS audio: {text[:50]}... (TTL: {ttl}s)")
             return True

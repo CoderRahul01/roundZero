@@ -45,7 +45,6 @@ app.include_router(storage_router)
 app.include_router(onboarding_router)
 app.include_router(question_progression_router)
 
-# Conditionally include vision routers if USE_VISION is enabled
 if settings.use_vision:
     try:
         from routes.vision_interview import router as vision_interview_router
@@ -60,6 +59,31 @@ if settings.use_vision:
     except ImportError as e:
         logger.warning(f"Vision Agents not available: {e}. Install with: uv sync --extra vision")
         settings.use_vision = False
+
+try:
+    from vision_agents.core import Runner, AgentLauncher, ServeOptions
+except ImportError:
+    Runner = None
+    AgentLauncher = None
+    ServeOptions = None
+
+
+async def create_agent(session_id: str, config: SessionConfig, **kwargs) -> InterviewerAgent:
+    """Factory function for AgentLauncher to create interviewer agents."""
+    return InterviewerAgent(session_id=session_id, config=config, service=service)
+
+
+# Initialize the Vision Agents Runner if available
+if Runner and AgentLauncher:
+    launcher = AgentLauncher(create_agent=create_agent)
+    # Respect Railway/external PORT environment variable
+    port = int(os.environ.get("PORT", 8000))
+    # Wrap our existing FastAPI app with the framework's Runner
+    # This provides standardized session management and server lifecycle
+    runner = Runner(launcher, serve_options=ServeOptions(fast_api=app, port=port))
+else:
+    runner = None
+    launcher = None
 
 # Initialized during startup to avoid blocking on import
 service = None
@@ -115,7 +139,10 @@ def _missing_env(keys: list[str]) -> list[str]:
 def _parse_origins() -> list[str]:
     return settings.normalized_cors_origins()
 
+logger.info("Initializing middleware with CORS origins: %s", _parse_origins())
+logger.info("Allowed Hosts: %s", settings.allowed_hosts or ["*"])
 
+app.add_middleware(GZipMiddleware, minimum_size=512)
 app.add_middleware(JWTAuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -124,26 +151,53 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=settings.cors_allow_credentials,
 )
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
-app.add_middleware(GZipMiddleware, minimum_size=512)
 
 
 @app.middleware("http")
 async def add_timing_header(request: Request, call_next):
     start = time.perf_counter()
-    response = await call_next(request)
-    duration_ms = (time.perf_counter() - start) * 1000
-    response.headers["X-Process-Time-Ms"] = f"{duration_ms:.2f}"
-    logger.info(
-        "request",
-        extra={
-            "path": request.url.path,
-            "method": request.method,
-            "status": response.status_code,
-            "duration_ms": round(duration_ms, 2),
-        },
-    )
-    return response
+    duration_ms = 0
+    
+    # Log incoming request for debugging
+    logger.info("Incoming request: %s %s | Host: %s | Origin: %s | ACR-Method: %s | ACR-Headers: %s", 
+                request.method, request.url.path, 
+                request.headers.get("host"), 
+                request.headers.get("origin"),
+                request.headers.get("access-control-request-method"),
+                request.headers.get("access-control-request-headers"))
+
+    try:
+        response = await call_next(request)
+        duration_ms = (time.perf_counter() - start) * 1000
+        response.headers["X-Process-Time-Ms"] = f"{duration_ms:.2f}"
+        
+        logger.info(
+            "request_success",
+            extra={
+                "path": request.url.path,
+                "method": request.method,
+                "status": response.status_code,
+                "duration_ms": round(duration_ms, 2),
+            },
+        )
+        return response
+    except Exception as e:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.error(
+            "request_error",
+            extra={
+                "path": request.url.path,
+                "method": request.method,
+                "error": str(e),
+                "duration_ms": round(duration_ms, 2),
+            },
+            exc_info=True
+        )
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error during request processing", "error": str(e)}
+        )
 
 
 class StartSessionRequest(BaseModel):
@@ -257,7 +311,12 @@ async def _maybe_start_voice_agent(call_id: str, session_id: str, config: Sessio
     if not settings.use_vision:
         return
     try:
-        agent = InterviewerAgent(session_id=session_id, config=config, service=service)
+        # If we have a framework launcher, use it for standardized session tracking
+        if launcher:
+            agent = await launcher.launch(session_id=session_id, config=config)
+        else:
+            agent = InterviewerAgent(session_id=session_id, config=config, service=service)
+            
         await agent.join_session_call(call_id)
     except Exception as exc:  # pragma: no cover - optional path
         logger.warning("Voice agent not started: %s", exc)
@@ -343,9 +402,14 @@ def ready() -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    if runner:
+        # Canonical way to start a Vision Agents production server
+        # This will use the settings from ServeOptions (host 0.0.0.0, port 8000 by default)
+        runner.run()
+    else:
+        import uvicorn
+        port = int(os.environ.get("PORT", 8000))
+        uvicorn.run(app, host="0.0.0.0", port=port)
 
 
 async def _preload_tts_cache():
