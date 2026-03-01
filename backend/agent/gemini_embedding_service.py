@@ -7,7 +7,7 @@ Generates embeddings for semantic similarity calculations using Google's Gemini 
 import asyncio
 import os
 from typing import Optional
-import google.generativeai as genai
+import google.genai as genai
 
 
 class GeminiEmbeddingService:

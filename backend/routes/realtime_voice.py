@@ -21,7 +21,7 @@ from agent.interruption_engine import InterruptionEngine
 from agent.context_tracker import ContextTracker
 from agent.speech_buffer import SpeechBuffer
 from agent.gemini_embedding_service import GeminiEmbeddingService
-from services.tts_service import TTSService
+from services.tts_service import ElevenLabsTTSService
 from rate_limit import RateLimiter
 from middleware import get_current_user
 
@@ -57,7 +57,7 @@ async def initialize_voice_controller(
     embedding_service = GeminiEmbeddingService()
     
     # Initialize TTS service
-    tts_service = TTSService()
+    tts_service = ElevenLabsTTSService()
     
     # Initialize STT service (placeholder - will be connected via WebSocket)
     stt_service = None  # Will be set up in WebSocket handler
