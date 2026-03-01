@@ -88,15 +88,8 @@ export default function App() {
     <div className="app-container">
       {screen === "setup" && <SetupScreen onStart={handleStart} />}
 
-      {screen === "interview" && config && streamClient && streamCall && (
-        <StreamVideo client={streamClient}>
-          <StreamCall call={streamCall}>
-            <InterviewScreen config={config} onEnd={handleEnd} streamEnabled />
-          </StreamCall>
-        </StreamVideo>
-      )}
-
-      {screen === "interview" && config && (!streamClient || !streamCall) && (
+      {/* DEMO MODE: Force text mode with browser TTS */}
+      {screen === "interview" && config && (
         <InterviewScreen config={config} onEnd={handleEnd} streamEnabled={false} />
       )}
 
