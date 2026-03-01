@@ -23,6 +23,9 @@ from rate_limit import RateLimiter
 from settings import Settings, get_settings
 from logger import setup_mongo_logging
 from routes.realtime_voice import router as realtime_voice_router
+from routes.storage import router as storage_router
+from routes.onboarding import router as onboarding_router
+from routes.question_progression import router as question_progression_router
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
@@ -37,6 +40,9 @@ app = FastAPI(title="RoundZero AI Backend", version="1.0.0", docs_url="/docs", r
 
 # Include routers
 app.include_router(realtime_voice_router)
+app.include_router(storage_router)
+app.include_router(onboarding_router)
+app.include_router(question_progression_router)
 
 # Initialized during startup to avoid blocking on import
 service = None
@@ -62,6 +68,12 @@ async def shutdown_event():
     if mongo_log_handler:
         logger.info("Shutting down MongoDB centralized logging...")
         await mongo_log_handler.stop_worker()
+    
+    # Cleanup storage repositories
+    logger.info("Closing storage repository connections...")
+    from routes.storage import cleanup_repositories
+    await cleanup_repositories()
+    logger.info("Storage repositories closed.")
 
 def _missing_env(keys: list[str]) -> list[str]:
     return [key for key in keys if not os.getenv(key)]
