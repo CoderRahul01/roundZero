@@ -117,6 +117,9 @@ async def startup_event():
     logger.info("Preloading TTS cache for faster responses...")
     asyncio.create_task(_preload_tts_cache())
     
+    logger.info("Initializing middleware with CORS origins: %s", _parse_origins())
+    logger.info("Allowed Hosts: %s", settings.allowed_hosts or ["*"])
+    
     logger.info("Startup complete - ready for requests")
 
 @app.on_event("shutdown")
@@ -139,9 +142,6 @@ def _missing_env(keys: list[str]) -> list[str]:
 def _parse_origins() -> list[str]:
     return settings.normalized_cors_origins()
 
-logger.info("Initializing middleware with CORS origins: %s", _parse_origins())
-logger.info("Allowed Hosts: %s", settings.allowed_hosts or ["*"])
-
 app.add_middleware(GZipMiddleware, minimum_size=512)
 app.add_middleware(JWTAuthMiddleware)
 app.add_middleware(
@@ -158,13 +158,14 @@ async def add_timing_header(request: Request, call_next):
     start = time.perf_counter()
     duration_ms = 0
     
-    # Log incoming request for debugging
-    logger.info("Incoming request: %s %s | Host: %s | Origin: %s | ACR-Method: %s | ACR-Headers: %s", 
-                request.method, request.url.path, 
-                request.headers.get("host"), 
-                request.headers.get("origin"),
-                request.headers.get("access-control-request-method"),
-                request.headers.get("access-control-request-headers"))
+    # Log incoming request for debugging (skip for health checks to reduce noise)
+    if not request.url.path in ["/health", "/ready"]:
+        logger.info("Incoming request: %s %s | Host: %s | Origin: %s | ACR-Method: %s | ACR-Headers: %s", 
+                    request.method, request.url.path, 
+                    request.headers.get("host"), 
+                    request.headers.get("origin"),
+                    request.headers.get("access-control-request-method"),
+                    request.headers.get("access-control-request-headers"))
 
     try:
         response = await call_next(request)
@@ -379,6 +380,10 @@ async def session_events(session_id: str):
 
     return EventSourceResponse(event_generator())
 
+
+@app.get("/")
+def root() -> dict[str, str]:
+    return {"status": "ok", "service": "RoundZero AI Backend"}
 
 @app.get("/health")
 def health() -> dict[str, str]:

@@ -156,7 +156,7 @@ def get_auth_token_verifier() -> AuthTokenVerifier:
 class JWTAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Skip auth for health/ready/docs or OPTIONS preflights
-        if request.method == "OPTIONS" or request.url.path in ["/health", "/ready", "/docs", "/openapi.json"]:
+        if request.method == "OPTIONS" or request.url.path in ["/", "/health", "/ready", "/docs", "/openapi.json"]:
             return await call_next(request)
 
         auth_header = request.headers.get("Authorization")
