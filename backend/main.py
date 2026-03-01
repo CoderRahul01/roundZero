@@ -27,10 +27,6 @@ from routes.realtime_voice import router as realtime_voice_router
 from routes.storage import router as storage_router
 from routes.onboarding import router as onboarding_router
 from routes.question_progression import router as question_progression_router
-from routes.vision_interview import router as vision_interview_router
-from routes.vision_websocket import router as vision_websocket_router
-from routes.vision_admin import router as vision_admin_router
-from agent.vision.utils.env_validator import validate_and_exit_on_failure
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
@@ -48,9 +44,22 @@ app.include_router(realtime_voice_router)
 app.include_router(storage_router)
 app.include_router(onboarding_router)
 app.include_router(question_progression_router)
-app.include_router(vision_interview_router)
-app.include_router(vision_websocket_router)
-app.include_router(vision_admin_router)
+
+# Conditionally include vision routers if USE_VISION is enabled
+if settings.use_vision:
+    try:
+        from routes.vision_interview import router as vision_interview_router
+        from routes.vision_websocket import router as vision_websocket_router
+        from routes.vision_admin import router as vision_admin_router
+        from agent.vision.utils.env_validator import validate_and_exit_on_failure
+        
+        app.include_router(vision_interview_router)
+        app.include_router(vision_websocket_router)
+        app.include_router(vision_admin_router)
+        logger.info("Vision Agents routes enabled")
+    except ImportError as e:
+        logger.warning(f"Vision Agents not available: {e}. Install with: uv sync --extra vision")
+        settings.use_vision = False
 
 # Initialized during startup to avoid blocking on import
 service = None
@@ -60,9 +69,14 @@ mongo_log_handler = None
 async def startup_event():
     global service, mongo_log_handler
     
-    # Validate environment variables first
-    logger.info("Validating environment variables...")
-    validate_and_exit_on_failure()
+    # Validate environment variables first (only for vision if enabled)
+    if settings.use_vision:
+        try:
+            from agent.vision.utils.env_validator import validate_and_exit_on_failure
+            logger.info("Validating Vision Agents environment variables...")
+            validate_and_exit_on_failure()
+        except ImportError:
+            logger.warning("Vision Agents validation skipped - package not installed")
     
     # Initialize the interviewer service in the event loop, not at module level
     logger.info("Initializing InterviewerService...")
