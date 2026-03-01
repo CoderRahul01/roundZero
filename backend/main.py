@@ -74,16 +74,14 @@ async def create_agent(session_id: str, config: SessionConfig, **kwargs) -> Inte
 
 
 # Initialize the Vision Agents Runner if available
-if Runner and AgentLauncher:
-    launcher = AgentLauncher(create_agent=create_agent)
-    # Respect Railway/external PORT environment variable
-    port = int(os.environ.get("PORT", 8000))
-    # Wrap our existing FastAPI app with the framework's Runner
-    # This provides standardized session management and server lifecycle
-    runner = Runner(launcher, serve_options=ServeOptions(fast_api=app, port=port))
-else:
-    runner = None
-    launcher = None
+runner = None
+# if Runner and AgentLauncher:
+#     launcher = AgentLauncher(create_agent=create_agent)
+#     port = int(os.environ.get("PORT", 8000))
+#     runner = Runner(launcher, serve_options=ServeOptions(fast_api=app, port=port))
+# else:
+#     runner = None
+launcher = None
 
 # Initialized during startup to avoid blocking on import
 service = None

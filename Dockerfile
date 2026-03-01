@@ -18,12 +18,7 @@ WORKDIR /app/backend
 ENV UV_LINK_MODE=copy
 RUN uv sync --frozen --extra vision
 
-# Expose port (Railway will inject $PORT)
-EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
-  CMD python -c "import urllib.request, os; urllib.request.urlopen(f'http://localhost:{os.environ.get(\"PORT\", 8000)}/health')"
 
 # Ensure dependencies are synced and start the framework-aligned server
 ENTRYPOINT ["sh", "-c", "uv sync --frozen --extra vision && uv run python run.py"]
