@@ -6,7 +6,7 @@ to avoid frustrating the candidate.
 """
 
 from typing import Optional
-from backend.agent.realtime_models import InterruptionContext
+from agent.realtime_models import InterruptionContext
 
 
 class InterruptionEngine:

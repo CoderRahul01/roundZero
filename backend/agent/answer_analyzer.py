@@ -12,8 +12,8 @@ from typing import Optional
 from anthropic import AsyncAnthropic
 import numpy as np
 
-from backend.agent.realtime_models import AnalysisResult
-from backend.agent.gemini_embedding_service import GeminiEmbeddingService
+from agent.realtime_models import AnalysisResult
+from agent.gemini_embedding_service import GeminiEmbeddingService
 
 
 class AnswerAnalyzer:

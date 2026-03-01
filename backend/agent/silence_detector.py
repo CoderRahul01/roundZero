@@ -10,7 +10,7 @@ import time
 from typing import Optional, Callable
 from dataclasses import dataclass
 
-from backend.agent.realtime_models import SilenceEvent
+from agent.realtime_models import SilenceEvent
 
 
 class SilenceDetector:

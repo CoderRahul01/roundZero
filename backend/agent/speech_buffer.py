@@ -8,7 +8,7 @@ import time
 from typing import Optional
 from dataclasses import dataclass
 
-from backend.agent.realtime_models import TranscriptSegment
+from agent.realtime_models import TranscriptSegment
 
 
 class SpeechBuffer:

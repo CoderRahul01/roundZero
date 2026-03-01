@@ -10,7 +10,7 @@ import time
 from typing import Optional
 from anthropic import AsyncAnthropic
 
-from backend.agent.realtime_models import PresenceCheckResult
+from agent.realtime_models import PresenceCheckResult
 
 
 class PresenceVerifier:
