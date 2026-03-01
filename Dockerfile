@@ -28,8 +28,8 @@ RUN pip install uv cython
 COPY backend/pyproject.toml ./
 COPY backend/uv.lock ./
 
-# Install dependencies
-RUN uv sync --frozen
+# Install dependencies (with vision extras for production)
+RUN uv sync --frozen --extra vision
 
 # Copy entire backend application
 COPY backend/ ./
