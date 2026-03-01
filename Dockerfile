@@ -8,16 +8,15 @@ WORKDIR /app
 # Install uv package manager
 RUN pip install --no-cache-dir uv
 
-# Copy dependency files
-COPY backend/pyproject.toml backend/uv.lock ./
+# Copy all files
+COPY . /app/
+
+# Navigate to backend specifically
+WORKDIR /app/backend
 
 # Install dependencies with vision extras
-# UV_LINK_MODE=copy ensures proper file handling in containers
 ENV UV_LINK_MODE=copy
 RUN uv sync --frozen --extra vision
-
-# Copy application code
-COPY backend/ ./
 
 # Expose port (Railway will inject $PORT)
 EXPOSE 8000
