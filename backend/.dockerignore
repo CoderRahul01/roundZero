@@ -1,46 +1,35 @@
-# Python
+# Ignore virtual environments
+.venv/
+venv/
+env/
+
+# Ignore Python cache & compiled files
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.Python
 .pytest_cache/
-.ruff_cache/
-*.egg-info/
+.coverage
+htmlcov/
 
-# Virtual env
-.venv/
-
-# Local env files (NEVER include secrets in image)
+# Ignore environment variables files
 .env
 .env.*
 !.env.example
 
-# Dev/debug scripts
-diagnose_roundzero.py
-run_diagnostic.sh
-diagnostic_results_*.json
-debug_*.py
-test_*.py
-trace_imports.py
-nohup.out
-import_trace.txt
-server_test.log
-research_notes.md
-DIAGNOSTIC_README.md
-QUICK_REFERENCE.md
-verify_ws.py
-
-# Large data files
-data/
-questions_normalized.json
-*.csv
-*.json.bak
-
-# Git
+# Ignore Git files
 .git/
 .gitignore
 
-# IDE
+# Ignore IDE files
 .vscode/
 .idea/
+
+# Ignore logs and testing
+logs/
+*.log
+
+# Ignore data folders with large local files if any
+# (assuming questions_normalized.json is needed, but large raw CSVs can be ignored)
+data/*.csv
+data/*.xlsx
