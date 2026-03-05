@@ -1,4 +1,8 @@
 {
+  "framework": "vite",
+  "buildCommand": "vite build",
+  "installCommand": "pnpm install",
+  "outputDirectory": "dist",
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
   ],
