@@ -7,11 +7,9 @@ Here are the exact manual steps to run or complete the deployment.
 
 ## 1. Cloud Run Deployment (Backend)
 
-The deployment is currently running automatically!
-When it finishes, you will see a URL in the terminal that looks like:
-`https://roundzero-backend-xxxxx-uc.a.run.app`
-
-Copy that URL! You need it for step 2.
+The deployment has **finished successfully**!
+Your live backend URL is:
+`https://roundzero-backend-543685349875.asia-south1.run.app`
 
 **Known expected behavior in production:**
 Cloud Run has a timeout. We set `--timeout 3600` (1 hour) which is plenty for any interview session. We also set `--session-affinity` which is mandatory for WebSocket routing to work properly across containers.
@@ -40,7 +38,7 @@ Go to your **Vercel Dashboard** → Your Project → **Settings** → **Environm
 
 1. Add a new variable:
    - **Key**: `VITE_BACKEND_URL`
-   - **Value**: The Cloud Run URL from Step 1 (e.g., `https://roundzero-backend-xxxxx.run.app`)
+   - **Value**: `https://roundzero-backend-543685349875.asia-south1.run.app`
    - **Environments**: Select Production, Preview, Development
 2. Add another variable:
    - **Key**: `VITE_NEON_AUTH_URL`
