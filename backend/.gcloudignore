@@ -1,0 +1,15 @@
+# Exclude anything we don't need uploaded to Cloud Build for deployment
+.venv/
+venv/
+env/
+__pycache__/
+.pytest_cache/
+.coverage
+htmlcov/
+data/
+*.log
+.env
+.git/
+.gitignore
+.vscode/
+.idea/
