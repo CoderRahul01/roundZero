@@ -1,0 +1,57 @@
+import uvicorn
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.core.settings import get_settings
+from app.core.middleware import JWTAuthMiddleware
+from app.core.logger import logger
+
+def create_app() -> FastAPI:
+    settings = get_settings()
+    
+    app = FastAPI(
+        title="RoundZero Gemini Live API",
+        version="2.0.0",
+        description="Real-time AI Interview Coach powered by Gemini 2.0 Flash Live"
+    )
+
+    # CORS
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.normalized_cors_origins(),
+        allow_credentials=settings.cors_allow_credentials,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # Auth Middleware
+    app.add_middleware(JWTAuthMiddleware)
+
+    @app.get("/health")
+    async def health_check():
+        return {"status": "healthy", "version": "2.0.0"}
+
+    @app.get("/ready")
+    async def ready_check():
+        # Add logic to check Gemini API connectivity if needed
+        return {"status": "ready"}
+
+    # Register Routers
+    from app.api.routes import router as api_router
+    from app.api.websocket import router as ws_router
+    
+    app.include_router(api_router)
+    app.include_router(ws_router)
+    
+    return app
+
+app = create_app()
+
+if __name__ == "__main__":
+    settings = get_settings()
+    uvicorn.run(
+        "app.main:app", 
+        host="0.0.0.0", 
+        port=8000, 
+        reload=settings.environment == "development"
+    )

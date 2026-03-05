@@ -1,45 +1,46 @@
-# Python cache
+# Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
+*.pyc
+*.pyo
+*.pyd
 .Python
-
-# Virtual environments
-.venv/
-venv/
-env/
-
-# Testing
 .pytest_cache/
-tests/
-*.test.py
+.ruff_cache/
+*.egg-info/
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-.DS_Store
+# Virtual env
+.venv/
+
+# Local env files (NEVER include secrets in image)
+.env
+.env.*
+!.env.example
+
+# Dev/debug scripts
+diagnose_roundzero.py
+run_diagnostic.sh
+diagnostic_results_*.json
+debug_*.py
+test_*.py
+trace_imports.py
+nohup.out
+import_trace.txt
+server_test.log
+research_notes.md
+DIAGNOSTIC_README.md
+QUICK_REFERENCE.md
+verify_ws.py
+
+# Large data files
+data/
+questions_normalized.json
+*.csv
+*.json.bak
 
 # Git
 .git/
 .gitignore
 
-# Documentation (keep README)
-*.md
-!README.md
-
-# Environment files (will be set via Railway dashboard)
-.env
-.env.local
-.env.*.local
-
-# Build artifacts
-*.egg-info/
-dist/
-build/
-
-# Logs
-*.log
-startup.log
+# IDE
+.vscode/
+.idea/

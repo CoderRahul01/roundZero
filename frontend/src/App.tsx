@@ -1,11 +1,4 @@
 import React, { useEffect, useState } from "react";
-import {
-  Call,
-  StreamCall,
-  StreamVideo,
-  StreamVideoClient,
-  User,
-} from "@stream-io/video-react-sdk";
 import { SetupScreen } from "./screens/SetupScreen";
 import { InterviewScreen } from "./screens/InterviewScreen";
 import { ReportScreen } from "./screens/ReportScreen";
@@ -15,8 +8,6 @@ import { LiveSessionConfig } from "./types";
 export default function App() {
   const [screen, setScreen] = useState<"setup" | "interview" | "report">("setup");
   const [config, setConfig] = useState<LiveSessionConfig | null>(null);
-  const [streamClient, setStreamClient] = useState<StreamVideoClient | null>(null);
-  const [streamCall, setStreamCall] = useState<Call | null>(null);
 
   useEffect(() => {
     const link = document.createElement("link");
@@ -42,44 +33,16 @@ export default function App() {
     document.head.appendChild(style);
   }, []);
 
-  const cleanupStream = () => {
-    if (streamCall) {
-      streamCall.leave().catch(() => undefined);
-    }
-    if (streamClient) {
-      streamClient.disconnectUser().catch(() => undefined);
-    }
-    setStreamCall(null);
-    setStreamClient(null);
-  };
-
   const handleStart = (cfg: LiveSessionConfig) => {
-    cleanupStream();
     setConfig(cfg);
-
-    if (cfg.stream_api_key && cfg.token && cfg.call_id) {
-      const user: User = { id: cfg.user_id, name: cfg.name };
-      const client = new StreamVideoClient({
-        apiKey: cfg.stream_api_key,
-        token: cfg.token,
-        user,
-      });
-
-      const call = client.call("default", cfg.call_id);
-      setStreamClient(client);
-      setStreamCall(call);
-    }
-
     setScreen("interview");
   };
 
   const handleEnd = () => {
-    cleanupStream();
     setScreen("report");
   };
 
   const handleRestart = () => {
-    cleanupStream();
     setConfig(null);
     setScreen("setup");
   };
@@ -88,9 +51,8 @@ export default function App() {
     <div className="app-container">
       {screen === "setup" && <SetupScreen onStart={handleStart} />}
 
-      {/* DEMO MODE: Force text mode with browser TTS */}
       {screen === "interview" && config && (
-        <InterviewScreen config={config} onEnd={handleEnd} streamEnabled={false} />
+        <InterviewScreen config={config} onEnd={handleEnd} />
       )}
 
       {screen === "report" && config && <ReportScreen config={config} onRestart={handleRestart} />}

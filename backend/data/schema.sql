@@ -5,10 +5,22 @@
 DROP TABLE IF EXISTS question_results CASCADE;
 DROP TABLE IF EXISTS sessions CASCADE;
 
+-- User Profiles table
+CREATE TABLE user_profiles (
+  id TEXT PRIMARY KEY, -- user_id from Neon Auth
+  full_name TEXT,
+  bio TEXT,
+  resume_url TEXT,
+  skills TEXT[],
+  experience_level TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
 -- Sessions table
 CREATE TABLE sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
   role TEXT,
   topics TEXT[],
   difficulty TEXT,
@@ -33,6 +45,7 @@ CREATE TABLE question_results (
 );
 
 -- Indexes
+CREATE INDEX idx_user_profiles_id ON user_profiles(id);
 CREATE INDEX idx_sessions_user_id ON sessions(user_id);
 CREATE INDEX idx_sessions_created_at ON sessions(created_at DESC);
 CREATE INDEX idx_question_results_session_id ON question_results(session_id);

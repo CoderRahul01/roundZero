@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { G } from "../theme";
 import { Label, Input, Btn, Spinner, GhostBtn } from "../components/UI";
-import { startSession } from "../api";
+import { startSession, fetchProfile, updateProfile } from "../api";
 import { LiveSessionConfig } from "../types";
 import {
   AuthUser,
@@ -64,6 +64,16 @@ export function SetupScreen({ onStart }: { onStart: (cfg: LiveSessionConfig) => 
       const user = await getCurrentUser();
       if (!mounted) return;
       setAuthUser(user);
+      
+      if (user) {
+        try {
+          const profile = await fetchProfile();
+          if (profile.name) setName(profile.name);
+        } catch (e) {
+          console.warn("Could not fetch profile", e);
+        }
+      }
+      
       setAuthReady(true);
     })();
 
@@ -105,6 +115,14 @@ export function SetupScreen({ onStart }: { onStart: (cfg: LiveSessionConfig) => 
 
       setAuthUser(result.user);
       setAuthPassword("");
+
+      // Fetch profile after auth
+      try {
+        const profile = await fetchProfile();
+        if (profile.name) setName(profile.name);
+      } catch (e) {
+        console.warn("Could not fetch profile details", e);
+      }
     } finally {
       setAuthLoading(false);
     }
@@ -122,6 +140,13 @@ export function SetupScreen({ onStart }: { onStart: (cfg: LiveSessionConfig) => 
     setLoading(true);
     setError(null);
     try {
+      // Save profile name if it exists and changed
+      try {
+        await updateProfile({ name });
+      } catch (e) {
+        console.warn("Failed to update profile", e);
+      }
+
       const data = await startSession({
         user_id: authUser?.id,
         name,
@@ -626,7 +651,7 @@ export function SetupScreen({ onStart }: { onStart: (cfg: LiveSessionConfig) => 
           )}
         </div>
         <p style={{ textAlign: "center", marginTop: "1.5rem", color: G.muted, fontSize: "0.75rem", fontFamily: G.mono }}>
-          Powered by Vision Agents · Claude AI · Pinecone · Supermemory
+          Powered by Gemini Live API · Google ADK · Pinecone · Neon
         </p>
       </div>
     </div>

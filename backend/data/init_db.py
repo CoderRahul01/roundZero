@@ -32,6 +32,7 @@ async def init():
         conn = await asyncpg.connect(dsn)
         try:
             # Verify tables exist
+            await conn.execute("SELECT id FROM user_profiles LIMIT 1")
             await conn.execute("SELECT id FROM sessions LIMIT 1")
             await conn.execute("SELECT id FROM question_results LIMIT 1")
             print("✅ Neon Tables READY")
@@ -41,9 +42,20 @@ async def init():
         print(f"❌ Neon Error: {e}")
         print("\nMake sure you have run the following SQL in Neon console:")
         print("""
+        CREATE TABLE user_profiles (
+            id TEXT PRIMARY KEY,
+            full_name TEXT,
+            bio TEXT,
+            resume_url TEXT,
+            skills TEXT[],
+            experience_level TEXT,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now()
+        );
+
         CREATE TABLE sessions (
             id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-            user_id text NOT NULL,
+            user_id text NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
             role text,
             topics text[],
             difficulty text,

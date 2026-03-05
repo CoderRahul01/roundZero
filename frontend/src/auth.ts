@@ -1,9 +1,9 @@
 import { getNeonAuthClient, getNeonAuthUrl } from "./lib/auth";
 
-const ALLOW_LEGACY_DEV_AUTH = process.env.REACT_APP_ALLOW_LEGACY_DEV_AUTH === "true";
+const ALLOW_LEGACY_DEV_AUTH = import.meta.env.VITE_ALLOW_LEGACY_DEV_AUTH === "true";
 
 const LEGACY_USER_STORAGE_KEY = "roundzero_legacy_user_id";
-const LEGACY_JWT_SECRET = process.env.REACT_APP_JWT_SECRET || "roundzero-super-secret-key";
+const LEGACY_JWT_SECRET = import.meta.env.VITE_JWT_SECRET || "roundzero-super-secret-key";
 
 type JsonObject = Record<string, unknown>;
 
@@ -114,13 +114,14 @@ async function fetchCurrentSession(): Promise<SessionState | null> {
   }
 
   try {
-    const result = await client.getSession();
+    const result: any = await client.getSession();
     if (result?.error) {
       cachedSession = null;
       return null;
     }
 
-    const session = normalizeNeonSession(result?.data);
+    const sessionData = result?.data !== undefined ? result.data : result;
+    const session = normalizeNeonSession(sessionData);
     cachedSession = session;
     return session;
   } catch (error) {
@@ -260,7 +261,7 @@ export async function signInWithEmail(email: string, password: string): Promise<
   }
 
   try {
-    const result = await client.signIn.email({ email, password });
+    const result: any = await client.signIn.email({ email, password });
     if (result?.error) {
       return {
         ok: false,
@@ -295,7 +296,7 @@ export async function signUpWithEmail(email: string, password: string): Promise<
   }
 
   try {
-    const result = await client.signUp.email({
+    const result: any = await client.signUp.email({
       email,
       password,
       name: displayNameFromEmail(email),

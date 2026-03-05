@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+google-genai
+google-adk
+python-dotenv
+pydantic-settings
+pyjwt[crypto]
+websockets

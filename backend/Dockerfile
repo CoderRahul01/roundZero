@@ -1,24 +1,38 @@
-# Use Python 3.12 (3.13 not widely supported yet)
-FROM python:3.12-slim
+# ── Stage 1: Dependencies ──────────────────────────────────────────────────────
+FROM python:3.12-slim AS builder
 
-# Set working directory
+# Install uv from official image
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 WORKDIR /app
 
-# Install uv
-RUN pip install uv
+# Copy lock files first (Docker layer cache)
+COPY pyproject.toml uv.lock ./
 
-# Copy dependency files
-COPY pyproject.toml ./
-COPY uv.lock ./
+# Install production deps into /app/.venv
+ENV UV_PROJECT_ENVIRONMENT=/app/.venv
+RUN uv sync --frozen --no-dev
 
-# Install dependencies
-RUN uv sync --frozen
+# ── Stage 2: Runtime ───────────────────────────────────────────────────────────
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Copy venv from builder
+COPY --from=builder /app/.venv /app/.venv
 
 # Copy application code
-COPY . .
+COPY app/ ./app/
 
-# Expose port
-EXPOSE 8000
+# Runtime config
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV PATH="/app/.venv/bin:$PATH"
 
-# Start command
-CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Cloud Run injects PORT (always 8080 in practice)
+ENV PORT=8080
+EXPOSE 8080
+
+# CRITICAL: --ws wsproto  → browser WebSocket compatibility
+# CRITICAL: --timeout-keep-alive 300 → prevents Cloud Run killing long WS sessions
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080} --ws wsproto --timeout-keep-alive 300 --workers 1 --log-level info"]

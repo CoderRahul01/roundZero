@@ -3,10 +3,19 @@ import { getAccessToken } from "./auth";
 export type InterviewMode = "buddy" | "strict";
 export type Difficulty = "easy" | "medium" | "hard";
 
-const API_BASE =
-  process.env.REACT_APP_BACKEND_URL ||
-  process.env.REACT_APP_API_BASE_URL ||
-  "http://localhost:8000";
+// In dev (Vite devserver), use '' so proxy routes /profile and /session to localhost:8080.
+// In production (Vercel), VITE_BACKEND_URL points to Cloud Run.
+const API_BASE: string = import.meta.env.DEV
+  ? ''  // relative — Vite proxy routes to localhost:8080
+  : (import.meta.env.VITE_BACKEND_URL ||
+     import.meta.env.VITE_API_BASE_URL ||
+     'http://localhost:8080');
+
+// WebSocket base — http → ws, https → wss (auto handles dev & prod)
+export const WS_BASE: string = import.meta.env.DEV
+  ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`
+  : API_BASE.replace(/^http/, 'ws');
+
 
 export interface StartSessionPayload {
   user_id?: string;
@@ -69,6 +78,15 @@ export interface SessionReport {
   }>;
 }
 
+export interface UserProfileSchema {
+  user_id: string;
+  name: string | null;
+  bio: string | null;
+  resume_text: string | null;
+  strengths: string[] | null;
+  weaknesses: string[] | null;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = await getAccessToken();
   if (!token) {
@@ -120,4 +138,15 @@ export function fetchReport(sessionId: string) {
 export async function getEventSource(sessionId: string): Promise<EventSource> {
   const token = await getAccessToken();
   return new EventSource(`${API_BASE}/session/${sessionId}/events?token=${token}`);
+}
+
+export function fetchProfile() {
+  return request<UserProfileSchema>("/profile/");
+}
+
+export function updateProfile(payload: Partial<UserProfileSchema>) {
+  return request<UserProfileSchema>("/profile/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }

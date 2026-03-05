@@ -1,6 +1,11 @@
 import os
 import uvicorn
-from main import app
+from dotenv import load_dotenv
+
+# Load environment variables from .env file into os.environ
+load_dotenv()
+
+from app.main import app
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))

@@ -20,7 +20,7 @@ cp .env.example .env   # add backend + Supabase keys
 ## Env Vars
 
 ```
-REACT_APP_BACKEND_URL=http://localhost:8000
+REACT_APP_BACKEND_URL=http://localhost:8080
 REACT_APP_NEON_AUTH_URL=
 REACT_APP_ALLOW_LEGACY_DEV_AUTH=false
 REACT_APP_JWT_SECRET=

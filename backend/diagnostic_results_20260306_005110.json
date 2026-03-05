@@ -1,0 +1,210 @@
+{
+  "timestamp": "2026-03-06T00:50:53.800857",
+  "tests": [
+    {
+      "category": "environment",
+      "test": "GOOGLE_API_KEY",
+      "status": "PASS",
+      "details": "Variable is set",
+      "error": "",
+      "timestamp": "2026-03-06T00:50:53.800876"
+    },
+    {
+      "category": "environment",
+      "test": "PINECONE_API_KEY",
+      "status": "PASS",
+      "details": "Variable is set",
+      "error": "",
+      "timestamp": "2026-03-06T00:50:53.800880"
+    },
+    {
+      "category": "environment",
+      "test": "UPSTASH_REDIS_REST_URL",
+      "status": "PASS",
+      "details": "Variable is set",
+      "error": "",
+      "timestamp": "2026-03-06T00:50:53.800884"
+    },
+    {
+      "category": "environment",
+      "test": "UPSTASH_REDIS_REST_TOKEN",
+      "status": "PASS",
+      "details": "Variable is set",
+      "error": "",
+      "timestamp": "2026-03-06T00:50:53.800887"
+    },
+    {
+      "category": "environment",
+      "test": "DATABASE_URL",
+      "status": "PASS",
+      "details": "Variable is set",
+      "error": "",
+      "timestamp": "2026-03-06T00:50:53.800890"
+    },
+    {
+      "category": "environment",
+      "test": "GEMINI_API_KEY",
+      "status": "PASS",
+      "details": "Optional variable is set",
+      "error": "",
+      "timestamp": "2026-03-06T00:50:53.800892"
+    },
+    {
+      "category": "environment",
+      "test": "BACKEND_URL",
+      "status": "WARN",
+      "details": "Optional variable not set",
+      "error": "",
+      "timestamp": "2026-03-06T00:50:53.800895"
+    },
+    {
+      "category": "environment",
+      "test": "FRONTEND_URL",
+      "status": "WARN",
+      "details": "Optional variable not set",
+      "error": "",
+      "timestamp": "2026-03-06T00:50:53.800901"
+    },
+    {
+      "category": "backend",
+      "test": "health_endpoint",
+      "status": "PASS",
+      "details": "Response: {'status': 'healthy', 'version': '2.0.0'}",
+      "error": "",
+      "timestamp": "2026-03-06T00:50:53.874514"
+    },
+    {
+      "category": "backend",
+      "test": "cors",
+      "status": "PASS",
+      "details": "CORS headers present",
+      "error": "",
+      "timestamp": "2026-03-06T00:50:53.875109"
+    },
+    {
+      "category": "websocket",
+      "test": "handshake",
+      "status": "PASS",
+      "details": "101 Switching Protocols",
+      "error": "",
+      "timestamp": "2026-03-06T00:50:54.090948"
+    },
+    {
+      "category": "websocket",
+      "test": "send_message",
+      "status": "PASS",
+      "details": "Message sent successfully",
+      "error": "",
+      "timestamp": "2026-03-06T00:50:54.091154"
+    },
+    {
+      "category": "websocket",
+      "test": "receive_message",
+      "status": "WARN",
+      "details": "Timeout waiting for response",
+      "error": "",
+      "timestamp": "2026-03-06T00:51:06.092631"
+    },
+    {
+      "category": "websocket",
+      "test": "close",
+      "status": "PASS",
+      "details": "Graceful close",
+      "error": "",
+      "timestamp": "2026-03-06T00:51:06.094319"
+    },
+    {
+      "category": "integration",
+      "test": "profile_creation",
+      "status": "FAIL",
+      "details": "Status: 401",
+      "error": "",
+      "timestamp": "2026-03-06T00:51:06.112156"
+    },
+    {
+      "category": "integration",
+      "test": "session_start",
+      "status": "FAIL",
+      "details": "Status: 401",
+      "error": "",
+      "timestamp": "2026-03-06T00:51:06.114063"
+    },
+    {
+      "category": "gemini",
+      "test": "client_init",
+      "status": "PASS",
+      "details": "Client initialized",
+      "error": "",
+      "timestamp": "2026-03-06T00:51:06.648892"
+    },
+    {
+      "category": "gemini",
+      "test": "live_models",
+      "status": "PASS",
+      "details": "Models: gemini-2.5-flash-native-audio-latest, gemini-2.5-flash-native-audio-preview-09-2025, gemini-2.5-flash-native-audio-preview-12-2025",
+      "error": "",
+      "timestamp": "2026-03-06T00:51:06.903411"
+    },
+    {
+      "category": "gemini",
+      "test": "model_test",
+      "status": "FAIL",
+      "details": "Model gemini-2.5-flash-native-audio-latest not available for this API key",
+      "error": "",
+      "timestamp": "2026-03-06T00:51:07.186064"
+    },
+    {
+      "category": "pinecone",
+      "test": "client_init",
+      "status": "PASS",
+      "details": "Client initialized",
+      "error": "",
+      "timestamp": "2026-03-06T00:51:07.209857"
+    },
+    {
+      "category": "pinecone",
+      "test": "indexes",
+      "status": "PASS",
+      "details": "Indexes: ['unideploy-code', 'agrigpt-backend-rag-clip-index', 'agrigpt-backend-rag-index', 'agri-cult-chatbot', 'interview-questions']",
+      "error": "",
+      "timestamp": "2026-03-06T00:51:08.469410"
+    },
+    {
+      "category": "pinecone",
+      "test": "index_stats",
+      "status": "PASS",
+      "details": "Index interview-questions accessible",
+      "error": "",
+      "timestamp": "2026-03-06T00:51:10.463524"
+    },
+    {
+      "category": "redis",
+      "test": "connection",
+      "status": "PASS",
+      "details": "Redis accessible",
+      "error": "",
+      "timestamp": "2026-03-06T00:51:10.653318"
+    },
+    {
+      "category": "redis",
+      "test": "set_operation",
+      "status": "PASS",
+      "details": "SET successful",
+      "error": "",
+      "timestamp": "2026-03-06T00:51:10.700414"
+    },
+    {
+      "category": "redis",
+      "test": "get_operation",
+      "status": "FAIL",
+      "details": "Value mismatch",
+      "error": "",
+      "timestamp": "2026-03-06T00:51:10.747503"
+    }
+  ],
+  "summary": {
+    "passed": 18,
+    "failed": 4,
+    "warnings": 3
+  }
+}
