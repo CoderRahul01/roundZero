@@ -29,7 +29,5 @@ htmlcov/
 logs/
 *.log
 
-# Ignore data folders with large local files if any
-# (assuming questions_normalized.json is needed, but large raw CSVs can be ignored)
-data/*.csv
-data/*.xlsx
+# Ignore data folders with large local files
+data/
