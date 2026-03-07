@@ -6,6 +6,7 @@ export interface SessionConfig {
   topics: string[];
   difficulty: "easy" | "medium" | "hard";
   mode: "buddy" | "strict";
+  videoSource?: "camera" | "screen" | "none";
 }
 
 export type LiveSessionConfig = SessionConfig & StartSessionResponse;

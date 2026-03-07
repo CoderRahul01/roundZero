@@ -7,7 +7,6 @@ from typing import Optional
 import jwt
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.settings import get_settings
 

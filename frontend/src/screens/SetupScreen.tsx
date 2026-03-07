@@ -42,6 +42,7 @@ export function SetupScreen({ onStart }: { onStart: (cfg: LiveSessionConfig) => 
   const [topics, setTopics] = useState<string[]>([]);
   const [difficulty, setDifficulty] = useState<"easy" | "medium" | "hard">("medium");
   const [mode, setMode] = useState<"buddy" | "strict">("buddy");
+  const [videoSource, setVideoSource] = useState<"camera" | "screen" | "none">("camera");
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -161,6 +162,7 @@ export function SetupScreen({ onStart }: { onStart: (cfg: LiveSessionConfig) => 
         topics,
         difficulty,
         mode,
+        videoSource,
         ...data,
       });
     } catch (err: any) {
@@ -598,6 +600,37 @@ export function SetupScreen({ onStart }: { onStart: (cfg: LiveSessionConfig) => 
                     ))}
                   </div>
 
+                  <Label style={{ marginTop: "2rem" }}>Vision (Optional)</Label>
+                  <p style={{ color: G.muted, fontSize: "0.75rem", marginBottom: "0.8rem", lineHeight: 1.4 }}>
+                    Allow the AI to see your face or screen for better context and non-verbal feedback. 
+                    Processed securely at 1 frame every 5 seconds.
+                  </p>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.5rem" }}>
+                    {[
+                      { id: "camera", label: "Camera" },
+                      { id: "screen", label: "Screen Share" },
+                      { id: "none", label: "Audio Only" },
+                    ].map((vs) => (
+                      <button
+                        key={vs.id}
+                        onClick={() => setVideoSource(vs.id as any)}
+                        style={{
+                          padding: "0.8rem",
+                          background: videoSource === vs.id ? "rgba(110,231,183,0.1)" : G.surface2,
+                          border: `1px solid ${videoSource === vs.id ? G.accent : G.border}`,
+                          color: videoSource === vs.id ? G.accent : G.muted,
+                          fontFamily: G.font,
+                          fontSize: "0.82rem",
+                          cursor: "pointer",
+                          transition: "all 0.15s",
+                          textAlign: "center"
+                        }}
+                      >
+                       {vs.label}
+                      </button>
+                    ))}
+                  </div>
+
                   <div style={{ background: G.surface2, border: `1px solid ${G.border}`, padding: "1.2rem", marginTop: "2rem" }}>
                     <div
                       style={{
@@ -617,6 +650,7 @@ export function SetupScreen({ onStart }: { onStart: (cfg: LiveSessionConfig) => 
                       ["Topics", topics.join(", ")],
                       ["Difficulty", difficulty],
                       ["Mode", mode],
+                      ["Vision", videoSource === 'none' ? 'Audio Only' : videoSource],
                     ].map(([k, v]) => (
                       <div
                         key={k}

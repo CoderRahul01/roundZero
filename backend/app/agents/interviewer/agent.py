@@ -15,7 +15,7 @@ class InterviewerAgent(adk.Agent):
     
     def __init__(
         self, 
-        mode: str = "behavioral", 
+        mode: str = "buddy",
         user_profile: Optional[dict] = None, 
         memory_context: str = "",
         role: str = "Software Engineer",
@@ -26,7 +26,7 @@ class InterviewerAgent(adk.Agent):
         settings = get_settings()
         
         # Select persona prompt
-        persona_instruction = INTERVIEW_PERSONAS.get(mode, INTERVIEW_PERSONAS["behavioral"])
+        persona_instruction = INTERVIEW_PERSONAS.get(mode, INTERVIEW_PERSONAS["buddy"])
         
         # Build core instruction
         full_instruction = f"{DEFAULT_SYSTEM_INSTRUCTION}\n\n"
@@ -71,7 +71,7 @@ class InterviewerAgent(adk.Agent):
 
 # Factory for creating agents
 async def create_interviewer(
-    mode: str = "behavioral", 
+    mode: str = "buddy", 
     user_profile: Optional[dict] = None,
     role: str = "Software Engineer",
     topics: List[str] = None,

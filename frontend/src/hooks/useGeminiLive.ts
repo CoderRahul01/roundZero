@@ -12,6 +12,7 @@ export interface GeminiLiveOptions {
   onInterrupt?: () => void;
   onComplete?: (data: any) => void;
   onError?: (error: string) => void;
+  videoSource?: 'camera' | 'screen' | 'none';
 }
 
 export interface UseGeminiLiveReturn {
@@ -35,7 +36,8 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
     onEmotion, 
     onInterrupt, 
     onComplete, 
-    onError 
+    onError,
+    videoSource = 'camera'
   } = options;
 
   const [isConnected, setIsConnected] = useState(false);
@@ -46,7 +48,10 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
   const retryCountRef = useRef(0);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
+  // mic capture context — MUST be 16kHz (ADK/Gemini input requirement)
+  const micCtxRef = useRef<AudioContext | null>(null);
+  // AI playback context — MUST be 24kHz (Gemini native-audio output rate)
+  const playbackCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const playbackQueueRef = useRef<Int16Array[]>([]);
@@ -54,27 +59,34 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
   const videoStreamRef = useRef<MediaStream | null>(null);
   const frameIntervalRef = useRef<number | null>(null);
 
-  // Setup Audio Context & Analyser
+  // Setup Mic AudioContext (16kHz) & AI Playback AudioContext (24kHz)
   const initAudio = useCallback(async () => {
     try {
-      if (!audioCtxRef.current) {
-        audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({
-          sampleRate: 16000 // ADK / Gemini standard for Speech
+      // 16kHz context for mic capture — required by ADK/Gemini STT
+      if (!micCtxRef.current) {
+        micCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({
+          sampleRate: 16000,
+        });
+      }
+      // 24kHz context for AI audio playback — Gemini native-audio outputs 24kHz PCM
+      if (!playbackCtxRef.current) {
+        playbackCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({
+          sampleRate: 24000,
         });
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const source = audioCtxRef.current.createMediaStreamSource(stream);
+      const source = micCtxRef.current.createMediaStreamSource(stream);
       
-      const analyser = audioCtxRef.current.createAnalyser();
+      const analyser = micCtxRef.current.createAnalyser();
       analyser.fftSize = 256;
       source.connect(analyser);
       analyserRef.current = analyser;
 
-      // Processor for capturing audio chunks
-      const processor = audioCtxRef.current.createScriptProcessor(4096, 1, 1);
+      // ScriptProcessor captures mic audio and sends raw 16kHz PCM to backend
+      const processor = micCtxRef.current.createScriptProcessor(4096, 1, 1);
       source.connect(processor);
-      processor.connect(audioCtxRef.current.destination);
+      processor.connect(micCtxRef.current.destination);
       processorRef.current = processor;
 
       processor.onaudioprocess = (e) => {
@@ -104,11 +116,20 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
   }, [onError]);
   
   // Setup Video Capture (Phase 2)
-  const initVideo = useCallback(async () => {
+  const initVideo = useCallback(async (sourceLabel: 'camera' | 'screen' | 'none') => {
+    if (sourceLabel === 'none') return;
+    
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { width: 640, height: 480, frameRate: 5 } 
-      });
+      let stream;
+      if (sourceLabel === 'screen') {
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: 2, width: 1280, height: 720 }
+        });
+      } else {
+        stream = await navigator.mediaDevices.getUserMedia({ 
+          video: { width: 640, height: 480, frameRate: 5 } 
+        });
+      }
       videoStreamRef.current = stream;
 
       const video = document.createElement('video');
@@ -116,14 +137,14 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
       await video.play();
 
       const canvas = document.createElement('canvas');
-      canvas.width = 640;
-      canvas.height = 480;
+      canvas.width = sourceLabel === 'screen' ? 1280 : 640;
+      canvas.height = sourceLabel === 'screen' ? 720 : 480;
       const ctx = canvas.getContext('2d');
 
       frameIntervalRef.current = window.setInterval(() => {
         if (wsRef.current?.readyState === WebSocket.OPEN && ctx) {
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const base64 = canvas.toDataURL('image/jpeg', 0.6);
+          const base64 = canvas.toDataURL('image/jpeg', 0.4);
           const data = base64.split(',')[1];
           wsRef.current.send(JSON.stringify({
             type: 'image',
@@ -131,17 +152,16 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
             mimeType: 'image/jpeg'
           }));
         }
-      }, 1000); // 1 frame per second is enough for most vision tasks
+      }, 5000); // 1 frame per 5 seconds
 
     } catch (err) {
-      console.warn('Video capture failed:', err);
-      // Don't set error as fatal, audio might still work
+      console.warn('Video capture failed or denied, continuing audio-only:', err);
     }
   }, []);
 
-  // Playback logic
+  // AI audio playback — uses 24kHz context to match Gemini native-audio output
   const playNextChunk = useCallback(async () => {
-    if (playbackQueueRef.current.length === 0 || isPlayingRef.current || !audioCtxRef.current) {
+    if (playbackQueueRef.current.length === 0 || isPlayingRef.current || !playbackCtxRef.current) {
       return;
     }
 
@@ -149,16 +169,17 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
     setIsAiSpeaking(true);
     
     const chunk = playbackQueueRef.current.shift()!;
-    const audioBuffer = audioCtxRef.current.createBuffer(1, chunk.length, audioCtxRef.current.sampleRate);
+    // playbackCtxRef is 24kHz — matches Gemini native-audio PCM output rate
+    const audioBuffer = playbackCtxRef.current.createBuffer(1, chunk.length, 24000);
     const channelData = audioBuffer.getChannelData(0);
     
     for (let i = 0; i < chunk.length; i++) {
       channelData[i] = chunk[i] / 0x7FFF;
     }
 
-    const source = audioCtxRef.current.createBufferSource();
+    const source = playbackCtxRef.current.createBufferSource();
     source.buffer = audioBuffer;
-    source.connect(audioCtxRef.current.destination);
+    source.connect(playbackCtxRef.current.destination);
     
     source.onended = () => {
       isPlayingRef.current = false;
@@ -174,12 +195,9 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
   const startSession = useCallback(() => {
     if (wsRef.current) return;
 
-    // Route WebSocket through Vite's proxy (/ws/ → localhost:8080/ws/)
-    // This avoids browser-specific WS handshake issues with direct port 8080 connections.
-    // In production, replace with actual WSS URL from VITE_BACKEND_URL.
-    const isDev = window.location.port === '3000';
-    const wsBase = isDev
-      ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`
+    // For WebSocket, connect directly to backend — bypass Vite proxy
+    const wsBase = baseUrl.includes('localhost:3000') 
+      ? 'ws://localhost:8080' 
       : baseUrl.replace('http', 'ws');
     const wsUrl = `${wsBase}/ws/${userId}/${sessionId}?mode=${mode}`;
     
@@ -191,13 +209,16 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
       setIsConnected(true);
       setError(null);
       
-      // Ensure AudioContext is resumed (browser policy)
-      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
-        await audioCtxRef.current.resume();
+      // Resume both AudioContexts — browser suspends them until user gesture
+      if (micCtxRef.current?.state === 'suspended') {
+        await micCtxRef.current.resume();
+      }
+      if (playbackCtxRef.current?.state === 'suspended') {
+        await playbackCtxRef.current.resume();
       }
       
       initAudio();
-      initVideo(); // Start vision pipeline
+      initVideo(videoSource); // Start vision pipeline
     };
 
     ws.binaryType = 'arraybuffer';
@@ -252,7 +273,7 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
         retryCountRef.current = 0;  // Reset for next manual start
       }
     };
-  }, [baseUrl, mode, sessionId, userId, token, initAudio, onTranscript, onAiTranscript, onEmotion, onInterrupt, onComplete, onError, playNextChunk]);
+  }, [baseUrl, mode, sessionId, userId, token, initAudio, onTranscript, onAiTranscript, onEmotion, onInterrupt, onComplete, onError, playNextChunk, initVideo, videoSource]);
 
   const stopSession = useCallback(() => {
     wsRef.current?.close();

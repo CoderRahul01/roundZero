@@ -38,6 +38,7 @@ export function InterviewScreen({
     mode: config.mode,
     baseUrl: WS_BASE,
     token: config.backend_token,
+    videoSource: config.videoSource,
     onTranscript: (text) => setUserTranscript(prev => `${prev} ${text}`.trim()),
     onAiTranscript: (text) => {
         setAiMsg(text);
