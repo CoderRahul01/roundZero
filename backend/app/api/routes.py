@@ -111,6 +111,15 @@ async def start_session(payload: StartSessionPayload, request: Request):
     # Store/Update config for 1 hour
     await SessionService.save_session(session_id, config_data)
     await SessionService.create_session_neon(session_id, config_data)
+    
+    # Audit log: Session Started
+    await SessionService.create_audit_log(
+        event_type="SESSION_STARTED",
+        user_id=user_id,
+        session_id=session_id,
+        metadata={"role": payload.role, "topics": payload.topics, "mode": payload.mode}
+    )
+    
     logger.info(f"Session {session_id} ready for WebSocket")
 
     return StartSessionResponse(
@@ -139,6 +148,16 @@ async def end_session(session_id: str):
         await ReportGenerator.generate_report(session_id)
     except Exception as e:
         logger.error(f"Falled to pre-generate report: {e}")
+
+    # Audit log: Session Ended
+    # We retrieve the session again to get the user_id since it's not in the path
+    session_data = await SessionService.get_session(session_id)
+    if session_data:
+        await SessionService.create_audit_log(
+            event_type="SESSION_ENDED",
+            user_id=session_data.get("user_id", "unknown"),
+            session_id=session_id
+        )
         
     return {"session_id": session_id, "status": "ended"}
 

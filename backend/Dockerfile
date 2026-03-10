@@ -21,8 +21,9 @@ WORKDIR /app
 # Copy venv from builder
 COPY --from=builder /app/.venv /app/.venv
 
-# Copy application code
+# Copy application code and startup script
 COPY app/ ./app/
+COPY run.py ./
 
 # Runtime config
 ENV PYTHONPATH=/app

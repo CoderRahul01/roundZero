@@ -88,6 +88,33 @@ class SessionService:
             logger.error(f"Error creating session in Neon: {e}")
 
     @staticmethod
+    async def create_audit_log(event_type: str, user_id: str, session_id: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None):
+        """
+        Creates an audit log entry in Neon.
+        """
+        settings = get_settings()
+        if not settings.database_url: return
+        
+        import asyncpg
+        try:
+            conn = await asyncpg.connect(settings.database_url)
+            try:
+                await conn.execute(
+                    """
+                    INSERT INTO audit_logs (event_type, user_id, session_id, metadata, created_at)
+                    VALUES ($1, $2, $3, $4, now())
+                    """,
+                    event_type,
+                    user_id,
+                    session_id,
+                    json.dumps(metadata or {})
+                )
+            finally:
+                await conn.close()
+        except Exception as e:
+            logger.error(f"Error creating audit log in Neon: {e}")
+
+    @staticmethod
     async def save_question_result(session_id: str, result: Dict[str, Any]) -> bool:
         """
         Saves a question result to both Redis (for real-time) and Neon (for persistence).

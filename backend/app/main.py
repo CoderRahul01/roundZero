@@ -43,7 +43,7 @@ def create_app() -> FastAPI:
 
     @fastapi_app.get("/health")
     async def health_check():
-        return {"status": "healthy", "version": "2.0.0"}
+        return {"status": "healthy", "version": "2.5.0"}
 
     @fastapi_app.get("/ready")
     async def ready_check():

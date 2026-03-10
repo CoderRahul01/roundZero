@@ -164,6 +164,16 @@ async def websocket_endpoint(
     token = params.get("token")
 
     # --------------------------------------------------------
+    # SECURITY: Origin Validation
+    # --------------------------------------------------------
+    origin = websocket.headers.get("origin")
+    from app.core.middleware import CORSASGIMiddleware
+    if not CORSASGIMiddleware.is_origin_allowed(origin):
+        logger.warning(f"Connection rejected: Forbidden origin {origin} for {session_id}")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    # --------------------------------------------------------
     # SECURITY: Rate Limiting for WebSockets
     # --------------------------------------------------------
     user_ip = websocket.client.host if websocket.client else "unknown"

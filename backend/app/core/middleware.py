@@ -171,6 +171,18 @@ class CORSASGIMiddleware:
         self.allowed_origins = list(dict.fromkeys(base_origins + extra_origins))  # deduplicate
         logger.info(f"CORS allowed origins: {self.allowed_origins}")
 
+    @classmethod
+    def is_origin_allowed(cls, origin: str) -> bool:
+        """
+        Static helper to check if an origin is in the allowed list.
+        """
+        # We re-fetch allowed origins to avoid static initialization issues if env changes
+        base_origins = ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "http://127.0.0.1:5173"]
+        extra_raw = os.getenv("CORS_ORIGINS", os.getenv("CORS_ALLOW_ORIGINS", ""))
+        extra_origins = [o.strip().rstrip("/") for o in extra_raw.split(",") if o.strip()]
+        allowed = list(dict.fromkeys(base_origins + extra_origins))
+        return origin.rstrip("/") in allowed or not origin
+
     async def __call__(self, scope, receive, send):
         # WebSocket — pass through immediately, no CORS processing
         if scope["type"] == "websocket":
