@@ -7,6 +7,7 @@ export interface SessionConfig {
   difficulty: "easy" | "medium" | "hard";
   mode: "buddy" | "strict";
   videoSource?: "camera" | "screen" | "none";
+  externalStream?: MediaStream | null;
 }
 
 export type LiveSessionConfig = SessionConfig & StartSessionResponse;
@@ -14,7 +15,6 @@ export type LiveSessionConfig = SessionConfig & StartSessionResponse;
 export interface QuestionResult {
   q: string;
   score: number;
-  emotion: string;
   fillers: number;
   feedback: string;
 }
@@ -22,10 +22,10 @@ export interface QuestionResult {
 export interface SessionReport {
   overallScore: number;
   confidenceAvg: number;
-  duration: string;
+  totalFillers: number;
   questionsAnswered: number;
+  summary: string;
   breakdown: QuestionResult[];
   strengths: string[];
   weaknesses: string[];
-  emotionTimeline: number[];
 }

@@ -55,7 +55,12 @@ export default function App() {
         <InterviewScreen config={config} onEnd={handleEnd} />
       )}
 
-      {screen === "report" && config && <ReportScreen config={config} onRestart={handleRestart} />}
+      {screen === "report" && config && (
+        <ReportScreen 
+          sessionId={config.session_id} 
+          onRestart={handleRestart} 
+        />
+      )}
     </div>
   );
 }

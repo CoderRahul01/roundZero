@@ -113,6 +113,16 @@ async function fetchCurrentSession(): Promise<SessionState | null> {
     return null;
   }
 
+  // Check if current cached session is expired
+  if (cachedSession?.expiresAt) {
+    const expires = new Date(cachedSession.expiresAt).getTime();
+    const now = Date.now() + 30000; // 30s buffer
+    if (now > expires) {
+      console.log("🔐 Proactively clearing expired session cache");
+      cachedSession = null;
+    }
+  }
+
   try {
     const result: any = await client.getSession();
     if (result?.error) {
@@ -221,7 +231,7 @@ export function isLegacyDevAuthEnabled(): boolean {
 
 export async function getCurrentUser(): Promise<AuthUser | null> {
   if (isNeonAuthConfigured()) {
-    const session = cachedSession ?? (await fetchCurrentSession());
+    const session = await fetchCurrentSession();
     return session?.user ?? null;
   }
 
@@ -234,7 +244,7 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
 
 export async function getAccessToken(): Promise<string | null> {
   if (isNeonAuthConfigured()) {
-    const session = cachedSession ?? (await fetchCurrentSession());
+    const session = await fetchCurrentSession();
     return session?.token ?? null;
   }
 

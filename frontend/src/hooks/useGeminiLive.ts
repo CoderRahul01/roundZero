@@ -11,8 +11,10 @@ export interface GeminiLiveOptions {
   onEmotion?: (emotion: string, confidence: number) => void;
   onInterrupt?: () => void;
   onComplete?: (data: any) => void;
+  onAgentEvent?: (data: any) => void;
   onError?: (error: string) => void;
   videoSource?: 'camera' | 'screen' | 'none';
+  externalStream?: MediaStream | null;
 }
 
 export interface UseGeminiLiveReturn {
@@ -23,6 +25,36 @@ export interface UseGeminiLiveReturn {
   startSession: () => void;
   stopSession: () => void;
 }
+
+// Worklet code for mic capture - processes blocks and sends to main thread
+const MIC_PROCESSOR_WORKLET = `
+  class MicProcessor extends AudioWorkletProcessor {
+    constructor() {
+      super();
+      this.bufferSize = 1024;
+      this.buffer = new Float32Array(this.bufferSize);
+      this.bufferIndex = 0;
+    }
+
+    process(inputs) {
+      const input = inputs[0];
+      if (!input || !input[0]) return true;
+      
+      const channelData = input[0];
+      for (let i = 0; i < channelData.length; i++) {
+        this.buffer[this.bufferIndex++] = channelData[i];
+        
+        if (this.bufferIndex >= this.bufferSize) {
+          // Send a copy of the buffer to the main thread
+          this.port.postMessage(this.buffer);
+          this.bufferIndex = 0;
+        }
+      }
+      return true;
+    }
+  }
+  registerProcessor('mic-processor', MicProcessor);
+`;
 
 export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
   const { 
@@ -36,8 +68,10 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
     onEmotion, 
     onInterrupt, 
     onComplete, 
+    onAgentEvent,
     onError,
-    videoSource = 'camera'
+    videoSource = 'camera',
+    externalStream
   } = options;
 
   const [isConnected, setIsConnected] = useState(false);
@@ -53,8 +87,13 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
   // AI playback context — MUST be 24kHz (Gemini native-audio output rate)
   const playbackCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
+  const isWorkletLoadedRef = useRef(false);
+  
+  // Ref for scheduled playback timing
+  const nextPlayTimeRef = useRef<number>(0);
   const playbackQueueRef = useRef<Int16Array[]>([]);
+  const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const isPlayingRef = useRef(false);
   const videoStreamRef = useRef<MediaStream | null>(null);
   const frameIntervalRef = useRef<number | null>(null);
@@ -67,6 +106,7 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
         micCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({
           sampleRate: 16000,
         });
+        isWorkletLoadedRef.current = false;
       }
       // 24kHz context for AI audio playback — Gemini native-audio outputs 24kHz PCM
       if (!playbackCtxRef.current) {
@@ -83,15 +123,29 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
       source.connect(analyser);
       analyserRef.current = analyser;
 
-      // ScriptProcessor captures mic audio and sends raw 16kHz PCM to backend
-      const processor = micCtxRef.current.createScriptProcessor(4096, 1, 1);
-      source.connect(processor);
-      processor.connect(micCtxRef.current.destination);
-      processorRef.current = processor;
+      // Register and load AudioWorklet ONLY ONCE per context
+      if (!isWorkletLoadedRef.current) {
+        const blob = new Blob([MIC_PROCESSOR_WORKLET], { type: 'application/javascript' });
+        const workletUrl = URL.createObjectURL(blob);
+        try {
+          await micCtxRef.current.audioWorklet.addModule(workletUrl);
+          isWorkletLoadedRef.current = true;
+          console.log('AudioWorklet module loaded successfully');
+        } catch (e) {
+          console.warn('AudioWorklet module add failed (might already exist):', e);
+        } finally {
+          URL.revokeObjectURL(workletUrl);
+        }
+      }
+      
+      const workletNode = new AudioWorkletNode(micCtxRef.current, 'mic-processor');
+      source.connect(workletNode);
+      workletNode.connect(micCtxRef.current.destination);
+      workletNodeRef.current = workletNode;
 
-      processor.onaudioprocess = (e) => {
+      workletNode.port.onmessage = (event) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
-          const inputData = e.inputBuffer.getChannelData(0);
+          const inputData = event.data; // Float32Array of 1024 samples
           // Convert Float32 to Int16 PCM
           const pcmData = new Int16Array(inputData.length);
           for (let i = 0; i < inputData.length; i++) {
@@ -100,7 +154,7 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
           wsRef.current.send(pcmData.buffer);
         }
 
-        // Update audio level for UI
+        // Update audio level for UI (using analyser)
         if (analyserRef.current) {
             const data = new Uint8Array(analyserRef.current.frequencyBinCount);
             analyserRef.current.getByteFrequencyData(data);
@@ -115,13 +169,15 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
     }
   }, [onError]);
   
-  // Setup Video Capture (Phase 2)
+  // Setup Video Capture (Phase 2 & 5)
   const initVideo = useCallback(async (sourceLabel: 'camera' | 'screen' | 'none') => {
     if (sourceLabel === 'none') return;
     
     try {
       let stream;
-      if (sourceLabel === 'screen') {
+      if (externalStream) {
+        stream = externalStream;
+      } else if (sourceLabel === 'screen') {
         stream = await navigator.mediaDevices.getDisplayMedia({
           video: { frameRate: 2, width: 1280, height: 720 }
         });
@@ -137,31 +193,37 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
       await video.play();
 
       const canvas = document.createElement('canvas');
-      canvas.width = sourceLabel === 'screen' ? 1280 : 640;
-      canvas.height = sourceLabel === 'screen' ? 720 : 480;
+      const targetWidth = sourceLabel === 'screen' ? 768 : 640;
+      const targetHeight = sourceLabel === 'screen' ? 768 : 480;
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
       const ctx = canvas.getContext('2d');
+
+      const captureInterval = sourceLabel === 'screen' ? 1000 : 5000;
 
       frameIntervalRef.current = window.setInterval(() => {
         if (wsRef.current?.readyState === WebSocket.OPEN && ctx) {
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const base64 = canvas.toDataURL('image/jpeg', 0.4);
+          const base64 = canvas.toDataURL('image/jpeg', 0.6);
           const data = base64.split(',')[1];
           wsRef.current.send(JSON.stringify({
-            type: 'image',
+            type: sourceLabel === 'screen' ? 'screen_frame' : 'image',
             data: data,
             mimeType: 'image/jpeg'
           }));
         }
-      }, 5000); // 1 frame per 5 seconds
+      }, captureInterval);
 
     } catch (err) {
       console.warn('Video capture failed or denied, continuing audio-only:', err);
     }
   }, []);
 
-  // AI audio playback — uses 24kHz context to match Gemini native-audio output
+  // AI audio playback — Scheduled for zero-gap playback at 24kHz
   const playNextChunk = useCallback(async () => {
-    if (playbackQueueRef.current.length === 0 || isPlayingRef.current || !playbackCtxRef.current) {
+    if (playbackQueueRef.current.length === 0 || !playbackCtxRef.current) {
+      isPlayingRef.current = false;
+      setIsAiSpeaking(false);
       return;
     }
 
@@ -169,7 +231,6 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
     setIsAiSpeaking(true);
     
     const chunk = playbackQueueRef.current.shift()!;
-    // playbackCtxRef is 24kHz — matches Gemini native-audio PCM output rate
     const audioBuffer = playbackCtxRef.current.createBuffer(1, chunk.length, 24000);
     const channelData = audioBuffer.getChannelData(0);
     
@@ -177,19 +238,46 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
       channelData[i] = chunk[i] / 0x7FFF;
     }
 
+    if (playbackCtxRef.current.state === 'suspended') {
+      console.log("🔊 Resuming playback context in playNextChunk...");
+      await playbackCtxRef.current.resume();
+    }
+
     const source = playbackCtxRef.current.createBufferSource();
     source.buffer = audioBuffer;
     source.connect(playbackCtxRef.current.destination);
+    activeSourcesRef.current.push(source);
     
-    source.onended = () => {
-      isPlayingRef.current = false;
-      if (playbackQueueRef.current.length === 0) {
-        setIsAiSpeaking(false);
-      }
+    // Scheduled playback logic
+    const now = playbackCtxRef.current.currentTime;
+    if (nextPlayTimeRef.current < now) {
+      // If we fell behind, catch up to 'now + small padding'
+      nextPlayTimeRef.current = now + 0.05;
+    }
+    
+    source.start(nextPlayTimeRef.current);
+    
+    // Update next play time
+    const duration = chunk.length / 24000;
+    nextPlayTimeRef.current += duration;
+
+    // We don't wait for onended anymore for the next chunk, 
+    // we can schedule the whole queue ahead of time.
+    if (playbackQueueRef.current.length > 0) {
       playNextChunk();
-    };
-    
-    source.start();
+    } else {
+        source.onended = () => {
+          // Remove from active sources
+          activeSourcesRef.current = activeSourcesRef.current.filter(s => s !== source);
+          
+          if (playbackQueueRef.current.length === 0 && activeSourcesRef.current.length === 0) {
+            isPlayingRef.current = false;
+            setIsAiSpeaking(false);
+          } else if (playbackQueueRef.current.length > 0) {
+            playNextChunk();
+          }
+        };
+      }
   }, []);
 
   const startSession = useCallback(() => {
@@ -209,15 +297,18 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
       setIsConnected(true);
       setError(null);
       
-      // Resume both AudioContexts — browser suspends them until user gesture
+      await initAudio();
+      
+      // Resume both AudioContexts — MUST happen on user gesture (this startSession call)
+      console.log("🔊 Attempting to resume AudioContexts on user gesture...");
       if (micCtxRef.current?.state === 'suspended') {
         await micCtxRef.current.resume();
       }
       if (playbackCtxRef.current?.state === 'suspended') {
         await playbackCtxRef.current.resume();
       }
+      console.log("🔊 AudioContext states - Mic:", micCtxRef.current?.state, "Playback:", playbackCtxRef.current?.state);
       
-      initAudio();
       initVideo(videoSource); // Start vision pipeline
     };
 
@@ -237,17 +328,39 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
           if (parts && parts[0]?.text) {
             onAiTranscript?.(parts[0].text);
           }
+          onAgentEvent?.(data);
+        }
+        if (data.type === 'tool_call') {
+            onAgentEvent?.(data);
         }
         if (data.type === 'interrupt') {
             onInterrupt?.();
             playbackQueueRef.current = []; // Clear queue on interrupt
+            // Stop ALL active and scheduled sources immediately
+            activeSourcesRef.current.forEach(source => {
+                try { source.stop(); } catch (e) {}
+            });
+            activeSourcesRef.current = [];
+            // Reset scheduled time on interrupt so new audio starts fresh
+            nextPlayTimeRef.current = 0; 
+            isPlayingRef.current = false;
+            setIsAiSpeaking(false);
         }
         if (data.type === 'complete') onComplete?.(data);
       } else {
         // Audio chunk (binary)
-        const chunk = new Int16Array(event.data);
-        playbackQueueRef.current.push(chunk);
-        playNextChunk();
+        if (event.data instanceof ArrayBuffer) {
+            if (playbackQueueRef.current.length === 0) {
+                console.log("🔊 First audio chunk received, size:", event.data.byteLength);
+            }
+            const chunk = new Int16Array(event.data);
+            playbackQueueRef.current.push(chunk);
+            if (!isPlayingRef.current) {
+              playNextChunk();
+            }
+        } else {
+            console.warn("⚠️ Received non-ArrayBuffer binary data", event.data);
+        }
       }
     };
 
@@ -273,11 +386,11 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
         retryCountRef.current = 0;  // Reset for next manual start
       }
     };
-  }, [baseUrl, mode, sessionId, userId, token, initAudio, onTranscript, onAiTranscript, onEmotion, onInterrupt, onComplete, onError, playNextChunk, initVideo, videoSource]);
+  }, [baseUrl, mode, sessionId, userId, token, initAudio, onTranscript, onAiTranscript, onEmotion, onInterrupt, onComplete, onAgentEvent, onError, playNextChunk, initVideo, videoSource]);
 
   const stopSession = useCallback(() => {
     wsRef.current?.close();
-    processorRef.current?.disconnect();
+    workletNodeRef.current?.disconnect();
     
     // Cleanup video (Phase 2)
     if (frameIntervalRef.current) {

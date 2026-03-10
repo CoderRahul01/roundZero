@@ -5,7 +5,7 @@ load_dotenv()
 from fastapi import FastAPI
 from app.core.settings import get_settings
 from app.core.middleware import JWTAuthMiddleware, CORSASGIMiddleware
-from app.core.logger import logger
+from app.core.gcp_logger import gcp_logger as logger
 
 
 class DiagnosticMiddleware:
@@ -23,7 +23,11 @@ class DiagnosticMiddleware:
             logger.info(f"DIAGNOSTIC WS: Path={scope.get('path')} Query={safe_query}")
             logger.info(f"DIAGNOSTIC WS: Origin={headers.get('origin', 'NONE')}")
         elif scope["type"] == "http":
-            logger.info(f"DIAGNOSTIC HTTP: {scope.get('method')} {scope.get('path')}")
+            user_ip = scope.get("client", ["unknown"])[0] 
+            logger.info(
+                f"DIAGNOSTIC HTTP: {scope.get('method')} {scope.get('path')} from {user_ip}",
+                extra_data={"http_method": scope.get('method'), "path": scope.get("path"), "client_ip": user_ip}
+            )
         return await self.app(scope, receive, send)
 
 
@@ -33,8 +37,8 @@ def create_app() -> FastAPI:
     # Core FastAPI app (no middleware added via add_middleware — see below)
     fastapi_app = FastAPI(
         title="RoundZero Gemini Live API",
-        version="2.0.0",
-        description="Real-time AI Interview Coach powered by Gemini 2.0 Flash Live"
+        version="2.5.0",
+        description="Real-time AI Interview Coach powered by Gemini 2.5 Flash Live"
     )
 
     @fastapi_app.get("/health")

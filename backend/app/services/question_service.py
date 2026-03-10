@@ -58,23 +58,24 @@ class QuestionService:
             # Create a query string
             query_text = f"Interview questions for a {role} focusing on {', '.join(topics)}. Difficulty: {difficulty}"
             
-            # Use gemini-embedding-001 (current standard for v1beta)
-            model_name = "gemini-embedding-001"
+            # Resilient model lookup. text-embedding-004 is current SOTA.
+            model_name = "text-embedding-004"
             print(f"DEBUG: Attempting embedding with model '{model_name}'", flush=True)
             
             try:
+                # Note: google-genai uses 'contents' (plural) for models.embed_content
                 res = client.models.embed_content(
                     model=model_name,
                     contents=[query_text],
                     config={"task_type": "RETRIEVAL_QUERY"}
                 )
             except Exception as e:
+                # If 404/not found, try with models/ prefix or fallback to embedding-001
                 err_msg = str(e).lower()
                 if "404" in err_msg or "not found" in err_msg:
-                    # Fallback to text-embedding-005 if gemini-embedding-001 is missing
-                    print(f"DEBUG: Model '{model_name}' not found, trying 'text-embedding-005'", flush=True)
+                    print(f"DEBUG: Model '{model_name}' not found, trying 'embedding-001'", flush=True)
                     res = client.models.embed_content(
-                        model="text-embedding-005",
+                        model="embedding-001",
                         contents=[query_text],
                         config={"task_type": "RETRIEVAL_QUERY"}
                     )

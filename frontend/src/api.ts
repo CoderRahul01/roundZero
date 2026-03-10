@@ -1,4 +1,4 @@
-import { getAccessToken } from "./auth";
+import { getAccessToken, refreshSession } from "./auth";
 
 export type InterviewMode = "buddy" | "strict";
 export type Difficulty = "easy" | "medium" | "hard";
@@ -60,21 +60,18 @@ export interface SubmitAnswerResponse {
 }
 
 export interface SessionReport {
-  overall_score: number;
-  confidence_avg: number;
-  duration_seconds: number;
-  questions_answered: number;
-  total_questions: number;
+  overallScore: number;
+  confidenceAvg: number;
+  totalFillers: number;
+  questionsAnswered: number;
+  summary: string;
   strengths: string[];
   weaknesses: string[];
-  emotion_timeline: number[];
   breakdown: Array<{
-    question: string;
+    q: string;
     score: number;
-    emotion: string;
-    fillers: number;
     feedback: string;
-    user_answer: string;
+    fillers: number;
   }>;
 }
 
@@ -103,6 +100,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
 
+  if (response.status === 401 && !(init?.headers as Record<string, string> | undefined)?.["X-Retry"]) {
+    console.warn(`🔐 401 Unauthorized for ${path}. Refreshing and retrying...`);
+    await refreshSession();
+    const retryInit = {
+      ...init,
+      headers: {
+        ...headers,
+        "X-Retry": "true"
+      }
+    };
+    return request(path, retryInit);
+  }
+
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `Request failed (${response.status})`);
@@ -111,8 +121,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export function startSession(payload: StartSessionPayload) {
-  return request<StartSessionResponse>("/session/start", {
+export function prepareSession(payload: StartSessionPayload) {
+  return request<{ session_id: string; total_questions: number; questions: any[] }>("/session/prepare", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function startSession(payload: StartSessionPayload, sessionId?: string) {
+  const url = sessionId ? `/session/start?session_id=${sessionId}` : "/session/start";
+  return request<StartSessionResponse>(url, {
     method: "POST",
     body: JSON.stringify(payload),
   });

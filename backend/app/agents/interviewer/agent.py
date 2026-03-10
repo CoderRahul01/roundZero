@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from typing import List, Optional
+import json
 
 from google import adk
+from google.adk.agents import LlmAgent
 from app.agents.interviewer.prompts import INTERVIEW_PERSONAS, DEFAULT_SYSTEM_INSTRUCTION
 from app.agents.interviewer.tools import get_interviewer_tools
 from app.core.settings import get_settings
+
+from app.agents.interviewer.super_prompt import get_full_prompt
 
 class InterviewerAgent(adk.Agent):
     """
@@ -17,57 +21,52 @@ class InterviewerAgent(adk.Agent):
         self, 
         mode: str = "buddy",
         user_profile: Optional[dict] = None, 
-        memory_context: str = "",
         role: str = "Software Engineer",
         topics: List[str] = None,
         difficulty: str = "Medium",
+        question_bank: List[dict] = None,
+        session_id: str = "N/A",
         **kwargs
     ):
         settings = get_settings()
         
-        # Select persona prompt
-        persona_instruction = INTERVIEW_PERSONAS.get(mode, INTERVIEW_PERSONAS["buddy"])
+        # Get modular prompt from super_prompt.py
+        full_instruction = get_full_prompt(mode=mode)
         
-        # Build core instruction
-        full_instruction = f"{DEFAULT_SYSTEM_INSTRUCTION}\n\n"
-        full_instruction += f"--- INTERVIEW CONTEXT ---\n"
-        full_instruction += f"Mode: {mode}\n"
+        # Add dynamic context (role, topics, questions) to the base instruction
+        full_instruction += "\n\n--- DYNAMIC CONTEXT ---\n"
         full_instruction += f"Target Role: {role}\n"
         full_instruction += f"Topics: {', '.join(topics) if topics else 'N/A'}\n"
         full_instruction += f"Difficulty: {difficulty}\n"
-        full_instruction += f"-------------------------\n\n"
-        full_instruction += f"PERSONA: {persona_instruction}"
+        full_instruction += f"Session ID: {session_id}\n"
         
-        # Ingest user profile metadata for personalization
-        if user_profile:
-            profile_context = "\n\n--- CANDIDATE PROFILE ---\n"
-            profile_context += f"Name: {user_profile.get('full_name') or user_profile.get('name', 'Not provided')}\n"
-            profile_context += f"Bio: {user_profile.get('bio', 'Not provided')}\n"
-            profile_context += f"Experience Level: {user_profile.get('experience_level', 'Not provided')}\n"
-            if user_profile.get("skills"):
-                profile_context += f"Skills: {', '.join(user_profile.get('skills', [])) if isinstance(user_profile.get('skills'), list) else user_profile.get('skills')}\n"
-            profile_context += "-------------------------\n"
-            full_instruction += profile_context
-            
-        # Add past interview memory if available
-        if memory_context:
-            full_instruction += f"\n\n--- PAST INTERVIEW MEMORY ---\n{memory_context}\n-----------------------------\n"
+        if question_bank:
+            questions_text = json.dumps(question_bank, indent=2)
+            full_instruction += f"\n--- QUESTION BANK ---\n{questions_text}\n"
 
-        # ADK Agent: pass the model as a string ID (per ADK quickstart).
-        # speech_config and response_modalities are set in RunConfig (websocket.py),
-        # not here — setting them in both causes conflicts.
-        # ADK reads GOOGLE_API_KEY and GOOGLE_GENAI_USE_VERTEXAI directly from env.
+        if user_profile:
+            profile_context = f"\n--- CANDIDATE PROFILE ---\nName: {user_profile.get('full_name') or user_profile.get('name', 'N/A')}\n"
+            full_instruction += profile_context
+
+        # Create the Strategy Agent ("The Brain")
+        strategy_agent = LlmAgent(
+            model="gemini-2.0-flash", 
+            name="strategy_agent",
+            instruction="""You are the interview strategy brain. 
+            Given the conversation history and candidate's response, decide:
+            1. Was the answer correct/partial/wrong?
+            2. Should we ask a follow-up or move on based on the question bank?
+            3. What specific hint or feedback should the interviewer provide?
+            """,
+        )
+
         super().__init__(
             name="interviewer",
-            model=settings.gemini_model,   # e.g. "gemini-2.5-flash-native-audio-latest"
+            model=settings.gemini_model,
             instruction=full_instruction,
             tools=get_interviewer_tools(),
+            sub_agents=[strategy_agent]
         )
-        
-    async def on_user_event(self, event: adk.UserEvent):
-        """Handler for specific user events if needed beyond standard bidi flow."""
-        # Custom logic for explicit triggers could go here
-        pass
 
 # Factory for creating agents
 async def create_interviewer(
@@ -75,9 +74,12 @@ async def create_interviewer(
     user_profile: Optional[dict] = None,
     role: str = "Software Engineer",
     topics: List[str] = None,
-    difficulty: str = "Medium"
+    difficulty: str = "Medium",
+    question_bank: List[dict] = None,
+    session_id: str = "N/A"
 ) -> InterviewerAgent:
     from app.services.supermemory_service import SupermemoryService
+    import json
     
     # 1. Retrieve past memory from Supermemory if user_profile exists
     memory_context = ""
@@ -90,5 +92,7 @@ async def create_interviewer(
         memory_context=memory_context,
         role=role,
         topics=topics,
-        difficulty=difficulty
+        difficulty=difficulty,
+        question_bank=question_bank,
+        session_id=session_id
     )

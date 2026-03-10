@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     # We expose google_api_key here only for validate_setup() and tool usage (e.g. Imagen).
     google_api_key: str | None = Field(None, alias="GOOGLE_API_KEY")
     google_genai_use_vertexai: str = Field("FALSE", alias="GOOGLE_GENAI_USE_VERTEXAI")
-    gemini_model: str = Field("gemini-2.5-flash-native-audio-latest", alias="GEMINI_MODEL", description="Gemini model for live sessions")
+    gemini_model: str = Field("gemini-2.5-flash-native-audio-preview-12-2025", alias="GEMINI_MODEL", description="Gemini model for live sessions")
 
     # Redis (Caching & Rate Limiting)
     upstash_redis_rest_url: str | None = Field(None, alias="UPSTASH_REDIS_REST_URL")

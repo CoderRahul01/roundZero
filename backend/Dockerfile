@@ -33,6 +33,5 @@ ENV PATH="/app/.venv/bin:$PATH"
 ENV PORT=8080
 EXPOSE 8080
 
-# CRITICAL: --ws wsproto  → browser WebSocket compatibility
-# CRITICAL: --timeout-keep-alive 300 → prevents Cloud Run killing long WS sessions
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080} --ws wsproto --timeout-keep-alive 300 --workers 1 --log-level info"]
+# CRITICAL: run.py sets ws=wsproto and ws_per_message_deflate=False
+CMD ["python", "run.py"]

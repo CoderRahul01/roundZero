@@ -14,7 +14,9 @@ import json
 import asyncio
 import logging
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status, Request
+from app.core.gcp_logger import gcp_logger as logger
+from app.core.rate_limit import ws_limiter
 
 # ADK imports
 from google import adk
@@ -22,12 +24,78 @@ from google.adk.agents import RunConfig, LiveRequestQueue
 from google.adk.agents.run_config import StreamingMode
 from google.adk.sessions import InMemorySessionService
 from google.genai import types as genai_types
+import google.genai.errors
 
 from app.agents.interviewer.agent import create_interviewer
 from app.services.session_service import SessionService
 from app.core.settings import get_settings
 
+import time
+from typing import List, Dict, Any
+
 logger = logging.getLogger(__name__)
+
+INTERVIEW_DURATION_SECONDS = 10 * 60  # 10 minutes
+
+# ---------------------------------------------------------------------------
+# Helper: Tool Result Interception
+# ---------------------------------------------------------------------------
+async def process_tool_results(event, websocket: WebSocket, session_state: dict):
+    """
+    Intercept tool call results from the agent and forward relevant
+    signals to the frontend.
+    """
+    calls = event.get_function_calls()
+    if not calls:
+        return
+
+    for call in calls:
+        if call.name == "record_score":
+            # Forward score to frontend
+            score_entry = {
+                "question_number": call.args.get("question_number"),
+                "question_text": call.args.get("question_text"),
+                "candidate_answer_summary": call.args.get("candidate_answer_summary"),
+                "score": call.args.get("score"),
+                "max_score": call.args.get("max_score", 10),
+                "feedback": call.args.get("feedback"),
+                "is_followup": call.args.get("is_followup", False),
+            }
+            # Update internal state if needed (ADK handles history, but we can track for UI)
+            if "scores" not in session_state:
+                session_state["scores"] = []
+            session_state["scores"].append(score_entry)
+
+            await websocket.send_json({
+                "type": "score_update",
+                "data": score_entry,
+                "running_total": sum(s["score"] for s in session_state["scores"]),
+                "running_max": sum(s["max_score"] for s in session_state["scores"]),
+            })
+
+        elif call.name == "request_screen_share":
+            await websocket.send_json({
+                "type": "screen_share",
+                "action": "request",
+            })
+
+        elif call.name == "stop_screen_share":
+            await websocket.send_json({
+                "type": "screen_share",
+                "action": "stop",
+            })
+
+        elif call.name == "signal_interview_end":
+            await websocket.send_json({
+                "type": "interview_end",
+                "data": {
+                    "total_score": call.args.get("total_score"),
+                    "max_possible_score": call.args.get("max_possible_score"),
+                    "overall_feedback": call.args.get("overall_feedback"),
+                    "strengths": call.args.get("strengths", []),
+                    "areas_for_improvement": call.args.get("areas_for_improvement", []),
+                },
+            })
 
 router = APIRouter()
 
@@ -36,7 +104,8 @@ router = APIRouter()
 # Created exactly ONCE when the module is first imported.
 # ============================================================
 
-APP_NAME = "roundzero-interviewer"
+# Should match the Agent.name property to avoid warnings
+APP_NAME = "interviewer"
 
 # Single in-memory session service shared across all WebSocket connections.
 # Replace with DatabaseSessionService for multi-replica production deployments.
@@ -50,7 +119,7 @@ _runner_lock = asyncio.Lock()
 
 
 async def _get_runner(mode: str, user_profile: dict | None, role: str,
-                      topics: list, difficulty: str) -> adk.Runner:
+                      topics: list, difficulty: str, session_id: str, question_bank: list | None = None) -> adk.Runner:
     """
     Return a fresh Runner for this session's specific agent configuration.
     Each session gets its own Agent instance (personalised system prompt),
@@ -62,6 +131,8 @@ async def _get_runner(mode: str, user_profile: dict | None, role: str,
         role=role,
         topics=topics,
         difficulty=difficulty,
+        question_bank=question_bank,
+        session_id=session_id
     )
     return adk.Runner(
         agent=agent,
@@ -83,21 +154,56 @@ async def websocket_endpoint(
     """
     Bidirectional interview streaming endpoint.
 
-    URL: ws://host/ws/{user_id}/{session_id}?mode=buddy
+    URL: ws://host/ws/{user_id}/{session_id}?mode=buddy&token=JWT
     """
     logger.info(f"DIAGNOSTIC WS: WebSocket request for user={user_id} session={session_id}")
 
-    # Accept the connection FIRST — before any async work that could throw.
+    # Extract query params FIRST (before accept) for Authentication
+    params = dict(websocket.query_params)
+    mode = params.get("mode", "buddy")
+    token = params.get("token")
+
+    # --------------------------------------------------------
+    # SECURITY: Rate Limiting for WebSockets
+    # --------------------------------------------------------
+    user_ip = websocket.client.host if websocket.client else "unknown"
+    try:
+        # We manually call the limiter since Depends() doesn't auto-handle WS well
+        # We pass a mock request object just containing the client host
+        mock_request = type('obj', (object,), {'url': type('obj', (object,), {'path': '/ws'}), 'client': type('obj', (object,), {'host': user_ip})})()
+        await ws_limiter(mock_request, identifier=f"{user_id}")
+    except Exception as e:
+        logger.warning(f"Connection rejected: Rate limit exceeded for user={user_id} ip={user_ip}")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    # --------------------------------------------------------
+    # SECURITY: JWT Authentication for WebSockets
+    # (Since ASGI Middleware skips WS for compatibility reasons)
+    # --------------------------------------------------------
+    if not token:
+        logger.warning(f"Connection rejected: Missing token for {session_id}")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    try:
+        from app.core.middleware import get_auth_token_verifier
+        verifier = get_auth_token_verifier()
+        # verify_token raises an exception if invalid/expired
+        payload = verifier.verify_token(token)
+        # Optional: verify payload['sub'] == user_id if strict enforcement needed
+    except Exception as e:
+        logger.warning(f"Connection rejected: Invalid token for {session_id}: {e}")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    # Accept the connection now that it is authenticated
     try:
         await websocket.accept()
-        logger.info(f"WebSocket accepted: session={session_id}")
+        logger.info(f"WebSocket accepted and authenticated: session={session_id}")
     except Exception as exc:
         logger.error(f"WebSocket accept() failed: {exc}")
         return
-
-    # Extract query params
-    params = dict(websocket.query_params)
-    mode = params.get("mode", "buddy")
 
     queue: LiveRequestQueue | None = None
 
@@ -108,7 +214,15 @@ async def websocket_endpoint(
 
         # 2a. Retrieve the app-level session config from Redis
         session_data = await SessionService.get_session(session_id)
-        user_profile = session_data.get("user_profile")
+        if not session_data:
+            logger.warning(f"No session data found for {session_id}, using defaults")
+            session_data = {}
+            
+        user_profile = session_data.get("user_profile") or {}
+        if "id" not in user_profile:
+            user_profile["id"] = user_id or session_data.get("user_id")
+
+        question_bank = session_data.get("questions")
 
         # 2b. Build a personalised Runner+Agent for this session
         runner = await _get_runner(
@@ -117,6 +231,8 @@ async def websocket_endpoint(
             role=session_data.get("role", "Software Engineer"),
             topics=session_data.get("topics", []),
             difficulty=session_data.get("difficulty", "Medium"),
+            question_bank=question_bank,
+            session_id=session_id
         )
         logger.info(f"Runner created for session={session_id}")
 
@@ -132,19 +248,23 @@ async def websocket_endpoint(
                 app_name=APP_NAME,
                 user_id=user_id,
                 session_id=session_id,
+                state={"scores": [], "start_time": time.time(), "ended": False}
             )
             logger.info(f"ADK session created: session={session_id}")
         else:
             logger.info(f"ADK session resumed: session={session_id}")
 
-        # 2d. RunConfig — MUST include StreamingMode.BIDI for WebSocket
+        # 2d. Create RunConfig with optimal streaming and resumption settings
         settings = get_settings()
         is_native_audio = "native-audio" in settings.gemini_model.lower()
         voice_name = "Kore" if mode == "buddy" else "Charon"
 
         run_config = RunConfig(
             streaming_mode=StreamingMode.BIDI,            # ← Critical: enables WebSocket bidi
-            response_modalities=[genai_types.Modality.AUDIO] if is_native_audio else [genai_types.Modality.TEXT],
+            session_resumption=genai_types.SessionResumptionConfig(),
+            context_window_compression=genai_types.ContextWindowCompressionConfig(),
+            tool_thread_pool_config=adk.agents.run_config.ToolThreadPoolConfig(max_workers=4),
+            response_modalities=["AUDIO"] if is_native_audio else ["TEXT"],
             speech_config=genai_types.SpeechConfig(
                 voice_config=genai_types.VoiceConfig(
                     prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(
@@ -158,9 +278,73 @@ async def websocket_endpoint(
         # 2e. Fresh LiveRequestQueue per connection (never reused)
         queue = LiveRequestQueue()
 
+        # Trigger the first greeting/question automatically so the candidate doesn't have to speak first
+        first_q = session_data.get("questions", [{}])[0].get("question", "Could you please introduce yourself?")
+        queue.send_content(
+            genai_types.Content(
+                role="user",
+                parts=[
+                    genai_types.Part(
+                        text=f"The session is starting. You are RoundZero. Start with a formal, professional greeting and introduction in the REQUIRED JSON FORMAT (NEW_QUESTION #1). Then, transition into the first interview question: {first_q}"
+                    )
+                ],
+            )
+        )
+
         # --------------------------------------------------------
         # PHASE 3: Bidi-streaming — concurrent upstream / downstream
         # --------------------------------------------------------
+
+        async def timer_task():
+            """Send time updates to frontend and pacing clues to agent."""
+            try:
+                state = adk_session.state
+                start_time = state.get("start_time", time.time())
+                
+                while not state.get("ended", False):
+                    elapsed = time.time() - start_time
+                    remaining = INTERVIEW_DURATION_SECONDS - elapsed
+                    
+                    if remaining <= 0:
+                        state["ended"] = True
+                        queue.send_content(genai_types.Content(
+                            role="user",
+                            parts=[genai_types.Part(text="[SYSTEM: Interview time is up. Wrap up immediately and call signal_interview_end.]")]
+                        ))
+                        await websocket.send_json({"type": "timer", "remaining_seconds": 0, "status": "expired"})
+                        break
+
+                    # Send update to UI
+                    await websocket.send_json({
+                        "type": "timer",
+                        "remaining_seconds": int(remaining),
+                        "elapsed_seconds": int(elapsed),
+                        "status": "running"
+                    })
+
+                    # Pacing clues to agent
+                    mins_left = int(remaining / 60)
+                    if mins_left in [8, 5, 2, 1] and (int(elapsed) % 60 < 5):
+                        queue.send_content(genai_types.Content(
+                            role="user",
+                            parts=[genai_types.Part(text=f"[SYSTEM: {mins_left} minutes remaining]")]
+                        ))
+                    
+                    await asyncio.sleep(30)
+            except Exception as e:
+                logger.debug(f"Timer task stopped for {session_id}: {e}")
+
+        async def heartbeat():
+            """Send periodic pings to keep the connection alive."""
+            try:
+                while True:
+                    await asyncio.sleep(30)
+                    if websocket.client_state.name == "CONNECTED":
+                        await websocket.send_json({"type": "ping"})
+                    else:
+                        break
+            except Exception as e:
+                logger.debug(f"Heartbeat stopped for {session_id}: {e}")
 
         async def upstream() -> None:
             """WebSocket client → LiveRequestQueue"""
@@ -179,17 +363,22 @@ async def websocket_endpoint(
                                     parts=[genai_types.Part(text=payload["content"])],
                                 ))
 
+                            elif msg_type == "pong":
+                                # Client responding to heartbeat
+                                continue
+
                             elif msg_type == "end_session":
+                                logger.info(f"Client requested session end: {session_id}")
                                 queue.close()
                                 break
 
-                            elif msg_type == "image":
+                            elif msg_type in ["image", "screen_frame"]:
                                 b64 = payload.get("data")
                                 if b64:
                                     import base64
                                     queue.send_realtime(genai_types.Blob(
                                         data=base64.b64decode(b64),
-                                        mime_type=payload.get("mimeType", "image/jpeg"),
+                                        mime_type=payload.get("mimeType") or payload.get("mime_type") or "image/jpeg",
                                     ))
                         except json.JSONDecodeError:
                             # Plain text fallback
@@ -208,7 +397,10 @@ async def websocket_endpoint(
             except WebSocketDisconnect:
                 logger.info(f"Upstream disconnected: session={session_id}")
             except Exception as exc:
-                logger.error(f"Upstream error: {exc}")
+                logger.error(f"Upstream error in session {session_id}: {exc}")
+            finally:
+                if queue:
+                    queue.close()
 
         async def downstream() -> None:
             """run_live() events → WebSocket client"""
@@ -219,47 +411,76 @@ async def websocket_endpoint(
                     run_config=run_config,
                 ):
                     # --- Text responses ---
-                    if event.content and event.content.parts:
+                    if getattr(event, 'content', None) and event.content.parts:
                         for part in event.content.parts:
-                            if part.text:
+                            # Skip internal thinking/reasoning segments
+                            if getattr(part, 'thought', False):
+                                continue
+
+                            if getattr(part, 'text', None):
                                 await websocket.send_json({
                                     "type": "text",
                                     "content": part.text,
-                                    "partial": event.partial,
+                                    "partial": getattr(event, 'partial', False),
                                 })
                             # Audio bytes (inline_data)
-                            if hasattr(part, "inline_data") and part.inline_data:
-                                await websocket.send_bytes(part.inline_data.data)
+                            if (hasattr(part, "inline_data") and part.inline_data) or (hasattr(part, "data") and part.data):
+                                audio_data = getattr(part, "inline_data", None)
+                                if audio_data:
+                                    await websocket.send_bytes(audio_data.data)
+                                elif hasattr(part, "data"):
+                                    await websocket.send_bytes(part.data)
 
                     # --- AI output transcription ---
-                    if event.output_transcription and event.output_transcription.text:
+                    ot = getattr(event, 'output_transcription', None)
+                    if ot and ot.text:
                         await websocket.send_json({
                             "type": "text",
-                            "content": event.output_transcription.text,
+                            "content": ot.text,
                             "partial": False,
                         })
 
                     # --- User input transcription ---
-                    if event.input_transcription and event.input_transcription.text:
+                    it = getattr(event, 'input_transcription', None)
+                    if it and it.text:
                         await websocket.send_json({
                             "type": "transcription",
                             "source": "user",
-                            "content": event.input_transcription.text,
-                            "is_final": getattr(event.input_transcription, "is_final", True),
+                            "content": it.text,
+                            "is_final": getattr(it, "is_final", True),
                         })
 
                     # --- Conversation boundary signals ---
-                    if event.turn_complete:
+                    if getattr(event, 'turn_complete', False):
                         await websocket.send_json({"type": "turn_complete"})
 
-                    if event.interrupted:
+                    if getattr(event, 'interrupted', False):
                         await websocket.send_json({"type": "interrupt"})
 
+                    # --- Tool calls and interception ---
+                    await process_tool_results(event, websocket, adk_session.state)
+
+                    calls = event.get_function_calls()
+                    if calls:
+                        for call in calls:
+                            await websocket.send_json({
+                                "type": "tool_call",
+                                "payload": {
+                                    "name": call.name,
+                                    "args": call.args
+                                }
+                            })
+
+            except google.genai.errors.APIError as e:
+                if "1000" in str(e):
+                    logger.info(f"Session {session_id} ended normally (Live API 1000)")
+                else:
+                    logger.error(f"Live API error in session {session_id}: {e}")
             except Exception as exc:
-                logger.error(f"Downstream error: {exc}", exc_info=True)
+                logger.error(f"Downstream error in session {session_id}: {exc}", exc_info=True)
 
         # Run both tasks concurrently
-        await asyncio.gather(upstream(), downstream(), return_exceptions=True)
+        await asyncio.gather(upstream(), downstream(), heartbeat(), timer_task(), return_exceptions=True)
 
     except Exception as exc:
         logger.error(f"WebSocket handler error: {exc}", exc_info=True)

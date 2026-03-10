@@ -11,84 +11,66 @@ from google import genai
 print("  Importing google.genai.types...", flush=True)
 from google.genai import types
 print("  Importing app.services.question_service...", flush=True)
-from app.services.question_service import QuestionService
-print("  tools.py reached imports end.", flush=True)
+from app.services.session_service import SessionService
 
-async def fetch_interview_questions(role: str, topics: List[str], difficulty: str) -> List[Dict[str, str]]:
+async def record_score(
+    question_number: int,
+    question_text: str,
+    candidate_answer_summary: str,
+    score: int,
+    max_score: int,
+    feedback: str,
+    is_followup: bool = False,
+    parent_question_number: Optional[int] = None,
+) -> str:
     """
-    Tool to fetch relevant interview questions.
-    Uses Pinecone RAG and Gemini Embeddings.
+    Tool to record the candidate's score for a question or follow-up.
+    The interviewer MUST call this after every single answer.
     """
-    logger.info(f"Fetching {difficulty} questions for {role} in {topics}")
-    return await QuestionService.fetch_questions(role, topics, difficulty)
+    logger.info(f"Score recorded: Q{question_number} = {score}/{max_score} (Follow-up: {is_followup})")
+    return f"Score of {score} recorded for question {question_number}."
 
-async def save_session_results(session_id: str, results: List[Dict[str, Any]]) -> str:
+async def get_score_table() -> str:
     """
-    Tool to save the results of an interview session to Neon.
+    Retrieve the current score table to review before giving closing summary.
+    Call this ONCE during the closing phase, before your verbal summary.
     """
-    from app.services.session_service import SessionService
-    
-    success_count = 0
-    for result in results:
-        if await SessionService.save_question_result(session_id, result):
-            success_count += 1
-            
-    logger.info(f"Saved {success_count}/{len(results)} question results for session {session_id}")
-    return f"Saved {success_count} results successfully."
+    return "Score table retrieved. Review candidate performance before final summary."
 
-def update_interview_metrics(emotion: str, confidence: int) -> str:
+async def signal_interview_end(
+    total_score: int,
+    max_possible_score: int,
+    overall_feedback: str,
+    strengths: List[str],
+    areas_for_improvement: List[str],
+) -> str:
     """
-    Tool to update the candidate's real-time metrics (emotion and confidence).
-    Use this when you notice a change in the candidate's non-verbal cues.
-    Confidence should be an integer between 0 and 100.
+    Signal that the interview is complete and provide the final report card.
+    Call this ONCE at the very end, after your verbal closing summary.
     """
-    logger.info(f"Metric update: Emotion={emotion}, Confidence={confidence}")
-    return f"Metrics updated to {emotion} ({confidence}%)"
+    logger.info(f"Interview ended. Final Score: {total_score}/{max_possible_score}")
+    return "Interview complete signal sent."
 
-def generate_interview_certificate(name: str, performance_summary: str) -> str:
+async def request_screen_share() -> str:
     """
-    Generates a personalized interview completion certificate using Imagen 3.
-    Call this at the very end of the interview session.
-    It returns a URL or confirmation of the generated image.
+    Tool to request screen sharing for coding questions.
     """
-    settings = get_settings()
-    if not settings.google_api_key:
-        return "Error: Missing GOOGLE_API_KEY for image generation."
-        
-    try:
-        client = genai.Client(api_key=settings.google_api_key)
-        prompt = (
-            f"A professional, elegant, and modern certificate of completion for an AI Interview. "
-            f"The name '{name}' is clearly inscribed in a beautiful serif font. "
-            f"Text: 'Certificate of Excellence'. "
-            f"Theme: Minimalist dark blue and gold borders. "
-            f"Context: {performance_summary}. "
-            f"High quality, 4k resolution, symmetrical layout."
-        )
-        
-        # Note: In a real-world scenario, we'd save this to a public URL or Cloud Storage.
-        # For the hackathon demo, we'll log it and simulate.
-        logger.info(f"Generating certificate for {name} with prompt: {prompt}")
-        
-        # Uncomment for actual generation if credits available
-        # response = client.models.generate_images(
-        #     model="imagen-3.0-generate-002",
-        #     prompt=prompt,
-        #     config=types.GenerateImagesConfig(number_of_images=1)
-        # )
-        # return f"Certificate generated successfully for {name}."
-        
-        return f"SIMULATED: Certificate generated for {name}. (Imagen 3 API call logged)"
-        
-    except Exception as e:
-        logger.error(f"Imagen Error: {e}")
-        return f"Error generating certificate: {str(e)}"
+    logger.info("Screen share requested by agent.")
+    return "Screen share request sent to candidate."
+
+async def stop_screen_share() -> str:
+    """
+    Tool to signal that screen share is no longer needed.
+    """
+    logger.info("Screen share stop requested by agent.")
+    return "Screen share stopped."
 
 def get_interviewer_tools() -> List[Any]:
     """Wraps tools for ADK consumption."""
     return [
-        fetch_interview_questions, 
-        save_session_results, 
-        update_interview_metrics,
-        generate_interview_certificate
+        record_score,
+        get_score_table,
+        signal_interview_end,
+        request_screen_share,
+        stop_screen_share,
     ]

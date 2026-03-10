@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { G } from "../theme";
 import { Label, Input, Btn, Spinner, GhostBtn } from "../components/UI";
-import { startSession, fetchProfile, updateProfile } from "../api";
+import { startSession, prepareSession, fetchProfile, updateProfile } from "../api";
 import { LiveSessionConfig } from "../types";
+import { useScreenShare } from "../services/screenShare/useScreenShare";
 import {
   AuthUser,
   getCurrentUser,
@@ -54,6 +55,8 @@ export function SetupScreen({ onStart }: { onStart: (cfg: LiveSessionConfig) => 
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+
+  const { stream: screenStream, start: startScreenCapture } = useScreenShare();
 
   const neonConfigured = isNeonAuthConfigured();
   const legacyAuthEnabled = isLegacyDevAuthEnabled();
@@ -137,25 +140,46 @@ export function SetupScreen({ onStart }: { onStart: (cfg: LiveSessionConfig) => 
     setAuthMode("signin");
   };
 
+
   const handleStart = async () => {
     setLoading(true);
     setError(null);
     try {
-      // Save profile name if it exists and changed
+      // 1. Save profile name if it exists and changed
       try {
         await updateProfile({ name });
       } catch (e) {
         console.warn("Failed to update profile", e);
       }
 
-      const data = await startSession({
+      // 2. Prepare the session (generates custom question bank via LLM)
+      const payload = {
         user_id: authUser?.id,
         name,
         role,
         topics,
         difficulty,
         mode,
-      });
+      };
+
+      const prepData = await prepareSession(payload);
+      
+      // 3. Handle Screen Capture if needed (Phase 5)
+      let externalStream = null;
+      if (videoSource === 'screen') {
+        try {
+          setLoading(true);
+          setError("Please select the window/screen you want to share...");
+          externalStream = await startScreenCapture();
+          setError(null);
+        } catch (err) {
+          throw new Error("Screen share was canceled or failed.");
+        }
+      }
+
+      // 4. Start the session using the pre-prepared session_id
+      const data = await startSession(payload, prepData.session_id);
+
       onStart({
         name,
         role,
@@ -163,6 +187,7 @@ export function SetupScreen({ onStart }: { onStart: (cfg: LiveSessionConfig) => 
         difficulty,
         mode,
         videoSource,
+        externalStream,
         ...data,
       });
     } catch (err: any) {

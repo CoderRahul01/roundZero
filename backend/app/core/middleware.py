@@ -36,9 +36,13 @@ class AuthTokenVerifier:
                 decode_kwargs = {
                     "algorithms": ["RS256", "EdDSA"],
                     "audience": self.audience,
+                    "leeway": 300,  # 5 minutes leeway for clock drift
                     "options": {"verify_aud": False, "verify_iss": False},
                 }
                 return jwt.decode(token, signing_key, **decode_kwargs)
+            except jwt.ExpiredSignatureError:
+                logger.warning("Neon Auth Token has expired (even with leeway)")
+                raise
             except Exception as exc:
                 print(f"RS256/EdDSA Verification failed: {exc}")
                 logger.debug(f"RS256 Verification failed, trying HS256: {exc}")
@@ -50,17 +54,19 @@ class AuthTokenVerifier:
                 settings.jwt_secret, 
                 algorithms=["HS256"], 
                 audience=["authenticated", self.audience] if self.audience else "authenticated",
+                leeway=300,
                 options={"verify_aud": False}
             )
+        except jwt.ExpiredSignatureError:
+            logger.warning("Local HS256 Token has expired")
+            raise
         except Exception as exc:
             print(f"HS256 Verification failed: {exc}")
             try:
                 header = jwt.get_unverified_header(token)
                 alg = header.get("alg")
-                print(f"JWT Verification failed. Token alg: {alg}. Final error: {exc}")
                 logger.error(f"JWT Verification failed. Token alg: {alg}. Final error: {exc}")
             except Exception as inner_exc:
-                print(f"Fatal JWT error: {exc}. Parse error: {inner_exc}")
                 logger.error(f"JWT Verification failed: {exc}")
 
             raise jwt.InvalidTokenError(str(exc))
