@@ -16,30 +16,31 @@ class InterviewerAgent(adk.Agent):
     RoundZero Interviewer Agent powered by Gemini 2.0 Flash Live.
     Handles multimodal (audio/video) interview sessions.
     """
-    
+
     def __init__(
-        self, 
+        self,
         mode: str = "buddy",
-        user_profile: Optional[dict] = None, 
+        user_profile: Optional[dict] = None,
         role: str = "Software Engineer",
         topics: List[str] = None,
         difficulty: str = "Medium",
         question_bank: List[dict] = None,
         session_id: str = "N/A",
+        memory_context: str = "",
         **kwargs
     ):
         settings = get_settings()
-        
+
         # Get modular prompt from super_prompt.py
         full_instruction = get_full_prompt(mode=mode)
-        
+
         # Add dynamic context (role, topics, questions) to the base instruction
         full_instruction += "\n\n--- DYNAMIC CONTEXT ---\n"
         full_instruction += f"Target Role: {role}\n"
         full_instruction += f"Topics: {', '.join(topics) if topics else 'N/A'}\n"
         full_instruction += f"Difficulty: {difficulty}\n"
         full_instruction += f"Session ID: {session_id}\n"
-        
+
         if question_bank:
             questions_text = json.dumps(question_bank, indent=2)
             full_instruction += f"\n--- QUESTION BANK ---\n{questions_text}\n"
@@ -47,6 +48,9 @@ class InterviewerAgent(adk.Agent):
         if user_profile:
             profile_context = f"\n--- CANDIDATE PROFILE ---\nName: {user_profile.get('full_name') or user_profile.get('name', 'N/A')}\n"
             full_instruction += profile_context
+
+        if memory_context:
+            full_instruction += f"\n--- CANDIDATE MEMORY (past sessions) ---\n{memory_context}\n"
 
         # Create the Strategy Agent ("The Brain")
         strategy_agent = LlmAgent(

@@ -35,7 +35,11 @@ export function InterviewScreen({
   const videoRef = useRef<HTMLVideoElement>(null);
   const screenVideoRef = useRef<HTMLVideoElement>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
+  const screenFrameIntervalRef = useRef<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Refs so callbacks captured at WebSocket creation time always see latest values
+  const isScreenSharingRef = useRef(false);
+  const toggleScreenShareRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   // Filter out duplicate or very short transcripts and count fillers
   const onTranscriptUpdate = useCallback((text: string) => {
@@ -52,7 +56,7 @@ export function InterviewScreen({
     }
   }, []);
 
-  const { isConnected, isAiSpeaking, audioLevel, error, startSession, stopSession } = useGeminiLive({
+  const { isConnected, isAiSpeaking, audioLevel, error, startSession, stopSession, sendMessage } = useGeminiLive({
     userId: config.user_id,
     sessionId: config.session_id,
     mode: config.mode,
@@ -90,9 +94,15 @@ export function InterviewScreen({
         // Handle visual cues for interruption
     },
     onComplete: (data) => {
-        if (data.is_finished) {
+        if (data.is_finished || data.type === 'interview_end') {
             handleEnd();
         }
+    },
+    onScreenShareRequest: () => {
+        if (!isScreenSharingRef.current) toggleScreenShareRef.current();
+    },
+    onScreenShareStop: () => {
+        if (isScreenSharingRef.current) toggleScreenShareRef.current();
     },
     onAgentEvent: (data) => {
         // Handle sync_interview_state tool call manually if needed 
@@ -126,27 +136,52 @@ export function InterviewScreen({
 
   const toggleScreenShare = async () => {
     if (isScreenSharing) {
+        if (screenFrameIntervalRef.current) {
+            clearInterval(screenFrameIntervalRef.current);
+            screenFrameIntervalRef.current = null;
+        }
         if (screenStreamRef.current) {
             screenStreamRef.current.getTracks().forEach(t => t.stop());
             screenStreamRef.current = null;
         }
+        isScreenSharingRef.current = false;
         setIsScreenSharing(false);
     } else {
         try {
-            const stream = await navigator.mediaDevices.getDisplayMedia({ 
-                video: true, 
+            const stream = await navigator.mediaDevices.getDisplayMedia({
+                video: true,
                 audio: false  // DO NOT CAPTURE AUDIO - already handled by getUserMedia
             });
             screenStreamRef.current = stream;
             if (screenVideoRef.current) {
                 screenVideoRef.current.srcObject = stream;
             }
-            
+
             stream.getVideoTracks()[0].onended = () => {
+                if (screenFrameIntervalRef.current) {
+                    clearInterval(screenFrameIntervalRef.current);
+                    screenFrameIntervalRef.current = null;
+                }
+                isScreenSharingRef.current = false;
                 setIsScreenSharing(false);
                 screenStreamRef.current = null;
             };
-            
+
+            // Capture and send screen frames to Gemini every second
+            const canvas = document.createElement('canvas');
+            canvas.width = 768;
+            canvas.height = 432;
+            const ctx = canvas.getContext('2d');
+            const videoEl = screenVideoRef.current;
+            screenFrameIntervalRef.current = window.setInterval(() => {
+                if (ctx && videoEl && videoEl.readyState >= 2) {
+                    ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+                    const base64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
+                    sendMessage({ type: 'screen_frame', data: base64, mimeType: 'image/jpeg' });
+                }
+            }, 1000);
+
+            isScreenSharingRef.current = true;
             setIsScreenSharing(true);
         } catch (err) {
             console.error("Screen share failed:", err);
@@ -166,6 +201,8 @@ export function InterviewScreen({
   const stopSessionRef = useRef(stopSession);
   useEffect(() => { startSessionRef.current = startSession; }, [startSession]);
   useEffect(() => { stopSessionRef.current = stopSession; }, [stopSession]);
+  // Keep toggleScreenShare ref current so onScreenShareRequest (captured at WS creation) always calls latest
+  useEffect(() => { toggleScreenShareRef.current = toggleScreenShare; }, [toggleScreenShare]);
 
   useEffect(() => {
     startSessionRef.current();           // Connect once on mount
@@ -206,6 +243,10 @@ export function InterviewScreen({
     `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 
   const handleEnd = async () => {
+    if (screenFrameIntervalRef.current) {
+      clearInterval(screenFrameIntervalRef.current);
+      screenFrameIntervalRef.current = null;
+    }
     stopSession();
     try {
       await endSession(config.session_id);

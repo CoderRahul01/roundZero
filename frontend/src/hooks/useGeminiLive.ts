@@ -13,6 +13,8 @@ export interface GeminiLiveOptions {
   onComplete?: (data: any) => void;
   onAgentEvent?: (data: any) => void;
   onError?: (error: string) => void;
+  onScreenShareRequest?: () => void;
+  onScreenShareStop?: () => void;
   videoSource?: 'camera' | 'screen' | 'none';
   externalStream?: MediaStream | null;
 }
@@ -24,6 +26,7 @@ export interface UseGeminiLiveReturn {
   error: string | null;
   startSession: () => void;
   stopSession: () => void;
+  sendMessage: (data: object | string) => void;
 }
 
 // Worklet code for mic capture - processes blocks and sends to main thread
@@ -57,19 +60,21 @@ const MIC_PROCESSOR_WORKLET = `
 `;
 
 export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
-  const { 
+  const {
     userId,
-    sessionId, 
-    mode, 
-    baseUrl, 
+    sessionId,
+    mode,
+    baseUrl,
     token,
-    onTranscript, 
-    onAiTranscript, 
-    onEmotion, 
-    onInterrupt, 
-    onComplete, 
+    onTranscript,
+    onAiTranscript,
+    onEmotion,
+    onInterrupt,
+    onComplete,
     onAgentEvent,
     onError,
+    onScreenShareRequest,
+    onScreenShareStop,
     videoSource = 'camera',
     externalStream
   } = options;
@@ -280,6 +285,12 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
       }
   }, []);
 
+  const sendMessage = useCallback((data: object | string) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(typeof data === 'string' ? data : JSON.stringify(data));
+    }
+  }, []);
+
   const startSession = useCallback(() => {
     if (wsRef.current) return;
 
@@ -333,6 +344,13 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
         if (data.type === 'tool_call') {
             onAgentEvent?.(data);
         }
+        if (data.type === 'score_update') {
+            onAgentEvent?.(data);
+        }
+        if (data.type === 'screen_share') {
+            if (data.action === 'request') onScreenShareRequest?.();
+            else if (data.action === 'stop') onScreenShareStop?.();
+        }
         if (data.type === 'interrupt') {
             onInterrupt?.();
             playbackQueueRef.current = []; // Clear queue on interrupt
@@ -342,10 +360,11 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
             });
             activeSourcesRef.current = [];
             // Reset scheduled time on interrupt so new audio starts fresh
-            nextPlayTimeRef.current = 0; 
+            nextPlayTimeRef.current = 0;
             isPlayingRef.current = false;
             setIsAiSpeaking(false);
         }
+        if (data.type === 'interview_end') onComplete?.(data);
         if (data.type === 'complete') onComplete?.(data);
       } else {
         // Audio chunk (binary)
@@ -386,7 +405,7 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
         retryCountRef.current = 0;  // Reset for next manual start
       }
     };
-  }, [baseUrl, mode, sessionId, userId, token, initAudio, onTranscript, onAiTranscript, onEmotion, onInterrupt, onComplete, onAgentEvent, onError, playNextChunk, initVideo, videoSource]);
+  }, [baseUrl, mode, sessionId, userId, token, initAudio, onTranscript, onAiTranscript, onEmotion, onInterrupt, onComplete, onAgentEvent, onError, onScreenShareRequest, onScreenShareStop, playNextChunk, initVideo, videoSource]);
 
   const stopSession = useCallback(() => {
     wsRef.current?.close();
@@ -417,6 +436,7 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
     audioLevel,
     error,
     startSession,
-    stopSession
+    stopSession,
+    sendMessage,
   };
 }
