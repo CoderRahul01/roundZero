@@ -26,7 +26,7 @@ class DiagnosticMiddleware:
             user_ip = scope.get("client", ["unknown"])[0] 
             logger.info(
                 f"DIAGNOSTIC HTTP: {scope.get('method')} {scope.get('path')} from {user_ip}",
-                extra_data={"http_method": scope.get('method'), "path": scope.get("path"), "client_ip": user_ip}
+                extra={"extra_data": {"http_method": scope.get('method'), "path": scope.get("path"), "client_ip": user_ip}}
             )
         return await self.app(scope, receive, send)
 

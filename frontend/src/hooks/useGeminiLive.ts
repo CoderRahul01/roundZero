@@ -287,7 +287,7 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
     const wsBase = baseUrl.includes('localhost:3000') 
       ? 'ws://localhost:8080' 
       : baseUrl.replace('http', 'ws');
-    const wsUrl = `${wsBase}/ws/${userId}/${sessionId}?mode=${mode}`;
+    const wsUrl = `${wsBase}/ws/${userId}/${sessionId}?mode=${mode}${token ? `&token=${token}` : ''}`;
     
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;

@@ -38,7 +38,7 @@ class RateLimiter:
             pipe.incr(key)
             if not current:
                 pipe.expire(key, self.window_seconds)
-            pipe.execute()
+            pipe.exec()
             
         except HTTPException:
             raise
