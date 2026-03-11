@@ -23,6 +23,7 @@ export function InterviewScreen({
   config: LiveSessionConfig;
   onEnd: () => void;
 }) {
+  const [sessionStarted, setSessionStarted] = useState(false);
   const [question, setQuestion] = useState(config.first_question);
   const [questionIndex, setQuestionIndex] = useState(config.question_index);
   const [aiMsg, setAiMsg] = useState("Initializing connection...");
@@ -56,7 +57,7 @@ export function InterviewScreen({
     }
   }, []);
 
-  const { isConnected, isAiSpeaking, audioLevel, error, startSession, stopSession, sendMessage } = useGeminiLive({
+  const { isConnected, isAiSpeaking, audioLevel, error, startSession, stopSession, sendMessage, resumeAudio } = useGeminiLive({
     userId: config.user_id,
     sessionId: config.session_id,
     mode: config.mode,
@@ -194,20 +195,13 @@ export function InterviewScreen({
     return () => clearInterval(timer);
   }, []);
 
-  // Use refs to capture latest functions without adding them to useEffect deps
-  // This prevents the effect from re-firing (and disconnecting/reconnecting) when
-  // startSession or stopSession are recreated by useCallback on every render.
-  const startSessionRef = useRef(startSession);
   const stopSessionRef = useRef(stopSession);
-  useEffect(() => { startSessionRef.current = startSession; }, [startSession]);
   useEffect(() => { stopSessionRef.current = stopSession; }, [stopSession]);
   // Keep toggleScreenShare ref current so onScreenShareRequest (captured at WS creation) always calls latest
   useEffect(() => { toggleScreenShareRef.current = toggleScreenShare; }, [toggleScreenShare]);
 
-  useEffect(() => {
-    startSessionRef.current();           // Connect once on mount
-    return () => stopSessionRef.current(); // Disconnect on unmount
-  }, []);  // Empty array = only fires on mount/unmount, never re-fires
+  // Disconnect on unmount
+  useEffect(() => () => stopSessionRef.current(), []);
 
   // Audio Visualization
   useEffect(() => {
@@ -431,6 +425,45 @@ export function InterviewScreen({
         </div>
       </div>
 
+      {/* Begin Interview overlay — shown until user clicks to unlock audio.
+          startSession() called here IS in a user-gesture call stack, so the
+          browser allows AudioContext creation + resume without blocking. */}
+      {!sessionStarted && (
+        <div
+          style={{
+            position: "fixed", inset: 0, zIndex: 100,
+            background: "rgba(0,0,0,0.85)",
+            display: "flex", flexDirection: "column",
+            alignItems: "center", justifyContent: "center", gap: "1.5rem",
+          }}
+        >
+          <div style={{ fontWeight: 800, fontSize: "2rem", color: G.text, letterSpacing: "-0.03em" }}>
+            Round<span style={{ color: G.accent }}>Zero</span>
+          </div>
+          <p style={{ color: G.muted, fontSize: "0.9rem" }}>
+            Your session is ready. Click to connect and unlock audio.
+          </p>
+          <button
+            onClick={() => {
+              setSessionStarted(true);
+              startSession(); // called directly from click → AudioContext unlocked
+            }}
+            style={{
+              padding: "1rem 3rem",
+              background: G.accent,
+              border: "none",
+              color: "#000",
+              fontFamily: G.font,
+              fontSize: "1rem",
+              fontWeight: 700,
+              cursor: "pointer",
+              letterSpacing: "-0.01em",
+            }}
+          >
+            Begin Interview →
+          </button>
+        </div>
+      )}
     </div>
   );
 }

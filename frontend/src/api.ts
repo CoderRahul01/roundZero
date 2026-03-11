@@ -7,9 +7,13 @@ export type Difficulty = "easy" | "medium" | "hard";
 // In production (Vercel), VITE_BACKEND_URL points to Cloud Run.
 const API_BASE: string = import.meta.env.DEV
   ? ''  // relative — Vite proxy routes to localhost:8080
-  : (import.meta.env.VITE_BACKEND_URL ||
-     import.meta.env.VITE_API_BASE_URL ||
-     'http://localhost:8080');
+  : (() => {
+      const url = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_BASE_URL;
+      if (!url && !import.meta.env.DEV) {
+        console.error("❌ MISSING VITE_BACKEND_URL! Falling back to localhost:8080 which will likely fail in production.");
+      }
+      return url || 'http://localhost:8080';
+    })();
 
 // WebSocket base — http → ws, https → wss (auto handles dev & prod)
 export const WS_BASE: string = import.meta.env.DEV

@@ -27,6 +27,7 @@ export interface UseGeminiLiveReturn {
   startSession: () => void;
   stopSession: () => void;
   sendMessage: (data: object | string) => void;
+  resumeAudio: () => Promise<void>;
 }
 
 // Worklet code for mic capture - processes blocks and sends to main thread
@@ -244,8 +245,16 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
     }
 
     if (playbackCtxRef.current.state === 'suspended') {
-      console.log("🔊 Resuming playback context in playNextChunk...");
-      await playbackCtxRef.current.resume();
+      try {
+        nextPlayTimeRef.current = 0; // reset so audio doesn't pile up
+        await playbackCtxRef.current.resume();
+      } catch (e) {
+        // Browser blocked resume (no user gesture) — push chunk back and bail.
+        playbackQueueRef.current.unshift(chunk);
+        isPlayingRef.current = false;
+        setIsAiSpeaking(false);
+        return;
+      }
     }
 
     const source = playbackCtxRef.current.createBufferSource();
@@ -291,36 +300,59 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
     }
   }, []);
 
+  // Must be called from a user-gesture handler to unlock autoplay.
+  const resumeAudio = useCallback(async () => {
+    try {
+      if (micCtxRef.current?.state === 'suspended') await micCtxRef.current.resume();
+      if (playbackCtxRef.current?.state === 'suspended') {
+        nextPlayTimeRef.current = 0; // reset scheduling so queued audio plays immediately
+        await playbackCtxRef.current.resume();
+      }
+    } catch (e) {
+      console.warn('AudioContext resume failed:', e);
+    }
+  }, []);
+
   const startSession = useCallback(() => {
     if (wsRef.current) return;
 
+    // ── Create BOTH AudioContexts synchronously here, before any async gap. ──
+    // This function must be called directly from a user-click handler so the
+    // browser still considers us inside a "user activation" and allows
+    // AudioContext creation + resume without blocking autoplay policy.
+    if (!micCtxRef.current) {
+      micCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      isWorkletLoadedRef.current = false;
+    }
+    if (!playbackCtxRef.current) {
+      playbackCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+    }
+    // Attempt synchronous unlock while still in the gesture call stack.
+    micCtxRef.current.resume().catch(() => {});
+    playbackCtxRef.current.resume().catch(() => {});
+
     // For WebSocket, connect directly to backend — bypass Vite proxy
-    const wsBase = baseUrl.includes('localhost:3000') 
-      ? 'ws://localhost:8080' 
+    const wsBase = baseUrl.includes('localhost:3000')
+      ? 'ws://localhost:8080'
       : baseUrl.replace('http', 'ws');
     const wsUrl = `${wsBase}/ws/${userId}/${sessionId}?mode=${mode}${token ? `&token=${token}` : ''}`;
-    
+
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = async () => {
-      retryCountRef.current = 0;  // Reset on successful connect
+      retryCountRef.current = 0;
       setIsConnected(true);
       setError(null);
-      
-      await initAudio();
-      
-      // Resume both AudioContexts — MUST happen on user gesture (this startSession call)
-      console.log("🔊 Attempting to resume AudioContexts on user gesture...");
-      if (micCtxRef.current?.state === 'suspended') {
-        await micCtxRef.current.resume();
-      }
-      if (playbackCtxRef.current?.state === 'suspended') {
-        await playbackCtxRef.current.resume();
-      }
-      console.log("🔊 AudioContext states - Mic:", micCtxRef.current?.state, "Playback:", playbackCtxRef.current?.state);
-      
-      initVideo(videoSource); // Start vision pipeline
+
+      await initAudio(); // getUserMedia + worklet setup (contexts already exist)
+
+      // Re-attempt resume after getUserMedia — media permission grants implicit
+      // autoplay activation in Chrome/Firefox even when called outside a gesture.
+      if (micCtxRef.current?.state === 'suspended') await micCtxRef.current.resume().catch(() => {});
+      if (playbackCtxRef.current?.state === 'suspended') await playbackCtxRef.current.resume().catch(() => {});
+
+      initVideo(videoSource);
     };
 
     ws.binaryType = 'arraybuffer';
@@ -438,5 +470,6 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
     startSession,
     stopSession,
     sendMessage,
+    resumeAudio,
   };
 }

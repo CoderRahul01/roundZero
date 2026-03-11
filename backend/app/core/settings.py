@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     redis_url: str = Field("redis://localhost:6379", alias="REDIS_URL")
     use_redis: bool = Field(True, description="Whether to use Redis for caching")
 
+    # Anthropic Claude (strategic answer evaluation)
+    anthropic_api_key: str | None = Field(None, alias="ANTHROPIC_API_KEY")
+
     # Supermemory (cross-session user memory)
     supermemory_api_key: str | None = Field(None, alias="SUPERMEMORY_API_KEY")
     use_supermemory: bool = Field(False, description="Enable Supermemory for cross-session memory")
