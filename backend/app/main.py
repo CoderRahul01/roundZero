@@ -65,10 +65,10 @@ def create_app() -> FastAPI:
     # connections flow through without any Starlette interception.
     #
     # Request flow (outer → inner):
-    #   DiagnosticMiddleware → JWTAuthMiddleware → CORSASGIMiddleware → FastAPI
-    asgi_app = CORSASGIMiddleware(fastapi_app)   # innermost
-    asgi_app = JWTAuthMiddleware(asgi_app)        # middle
-    asgi_app = DiagnosticMiddleware(asgi_app)     # outermost
+    #   DiagnosticMiddleware → CORSASGIMiddleware → JWTAuthMiddleware → FastAPI
+    asgi_app = JWTAuthMiddleware(fastapi_app)    # innermost
+    asgi_app = CORSASGIMiddleware(asgi_app)      # middle
+    asgi_app = DiagnosticMiddleware(asgi_app)    # outermost
 
     return asgi_app
 
