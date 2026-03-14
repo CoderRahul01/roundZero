@@ -54,12 +54,17 @@ async def evaluate_answer(
     question_number: int,
     question_text: str,
     candidate_answer: str,
+    ideal_answer: str = "",
     topic: str = "General",
     difficulty: str = "Medium",
 ) -> str:
     """
     CALL THIS IMMEDIATELY after the candidate finishes answering any question or follow-up.
-    Claude will evaluate the answer and tell you exactly what to do next.
+    Claude evaluates the answer quality; Gemini Embeddings scores semantic alignment.
+
+    Pass ideal_answer when available (from the question bank) — it enables
+    Gemini embedding-based semantic alignment scoring for a richer, more accurate
+    score that blends qualitative (Claude) with quantitative (Gemini) signals.
 
     Returns a structured coaching brief with:
     - Whether the answer was correct / partial / wrong / "don't know"
@@ -67,7 +72,7 @@ async def evaluate_answer(
     - Whether to ask a follow-up, give a hint, correct them, or move to the next question
     - The exact follow-up question to ask (if needed)
     - Whether slang was detected (and how to redirect)
-    - A score 1-10 with explanation
+    - A score 1-10 with explanation (blends Claude quality + semantic similarity)
 
     You MUST act on the next_action field:
     - NEXT_QUESTION          → record_score then ask the next question from the bank
@@ -84,6 +89,7 @@ async def evaluate_answer(
         topic=topic,
         difficulty=difficulty,
         question_number=question_number,
+        ideal_answer=ideal_answer,
     )
 
     logger.info(

@@ -304,7 +304,13 @@ async def websocket_endpoint(
             output_audio_transcription=genai_types.AudioTranscriptionConfig(),
         )
 
-        # 2e. Fresh LiveRequestQueue per connection (never reused)
+        # 2e. Inject per-connection context vars so tool functions can persist
+        # results and push WS events without needing the event-stream path.
+        from app.agents.interviewer.tools import _session_id_ctx, _websocket_ctx
+        _session_id_ctx.set(session_id)
+        _websocket_ctx.set(websocket)
+
+        # 2f. Fresh LiveRequestQueue per connection (never reused)
         queue = LiveRequestQueue()
 
         # Trigger the first greeting/question automatically so the candidate doesn't have to speak first

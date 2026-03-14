@@ -15,32 +15,15 @@ class ReportGenerator:
     async def generate_report(session_id: str) -> Dict[str, Any]:
         logger.info(f"Generating report for session {session_id}")
         
-        # 1. Fetch all raw results
+        # 1. Fetch all raw results — use get_session_results which checks:
+        #    Redis list (session_results:{id}) → config blob → Neon, in order.
         session_data = await SessionService.get_session(session_id)
         if not session_data:
             raise ValueError(f"Session {session_id} not found")
-            
-        results = session_data.get("results", [])
-        
-        # Fallback to Neon if Redis results are missing
-        if not results:
-            logger.info(f"Results missing in Redis for {session_id}, checking Neon...")
-            settings = get_settings()
-            if settings.database_url:
-                import asyncpg
-                try:
-                    conn = await asyncpg.connect(settings.database_url)
-                    try:
-                        rows = await conn.fetch(
-                            "SELECT question_text, user_answer, ideal_answer, score, filler_word_count, emotion_log FROM question_results WHERE session_id = $1 ORDER BY created_at ASC",
-                            session_id
-                        )
-                        results = [dict(r) for r in rows]
-                        logger.info(f"Fetched {len(results)} results from Neon")
-                    finally:
-                        await conn.close()
-                except Exception as e:
-                    logger.error(f"Failed to fetch results from Neon: {e}")
+
+        results = await SessionService.get_session_results(session_id)
+        logger.info(f"Loaded {len(results)} results for session {session_id}")
+
         user_id = session_data.get("user_id")
         
         if not results:

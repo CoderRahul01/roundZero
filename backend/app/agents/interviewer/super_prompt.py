@@ -63,8 +63,9 @@ STEP 1 — ASK the question clearly.
 STEP 2 — LISTEN fully. Do NOT interrupt unless they are rambling 60+ seconds
   off-topic. Use "mm-hmm", "right", "okay" as natural affirmations while they speak.
 
-STEP 3 — CALL evaluate_answer(question_number, question_text, candidate_answer, topic, difficulty)
+STEP 3 — CALL evaluate_answer(question_number, question_text, candidate_answer, ideal_answer, topic, difficulty)
   Do this IMMEDIATELY after they finish. Wait for the result.
+  Look up ideal_answer for this question from the QUESTION BANK in your context — pass "" if not found.
   The result tells you exactly what to say and do next.
 
 STEP 4 — ACT on the evaluate_answer result:
@@ -215,7 +216,8 @@ TOOL_INSTRUCTIONS = """
 <TOOL_ORDER — ALWAYS FOLLOW>
 
 After EVERY answer (main or follow-up):
-  1. evaluate_answer(...)    ← call first, get guidance
+  1. evaluate_answer(question_number, question_text, candidate_answer, ideal_answer, topic, difficulty)
+     Pass ideal_answer from the QUESTION BANK. ← call first, get guidance
   2. Speak the coaching_note aloud
   3. Act on next_action (follow-up / hint / next Q)
   4. record_score(...)       ← call after speaking
