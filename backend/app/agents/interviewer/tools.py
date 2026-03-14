@@ -1,9 +1,49 @@
-import logging
-from typing import List, Any, Optional
+"""
+Interviewer Agent Tools
+=======================
+Functions called by Aria (the Gemini Live agent) during the interview.
 
-from app.core.logger import logger
+Context-variable injection
+--------------------------
+Before starting an ADK session, websocket.py sets two ContextVars:
+
+  _session_id_ctx  – the current interview session ID
+  _websocket_ctx   – the live FastAPI WebSocket for this connection
+
+Python's asyncio propagates the current context to child tasks (via
+asyncio.gather / asyncio.create_task), so these values are visible
+inside every tool call regardless of how ADK schedules them.
+
+This gives us a belt-and-suspenders guarantee:
+  • record_score   → persists to Redis/Neon directly from the tool
+  • signal_interview_end → sends the terminal WS event directly from the tool
+
+Both also have a secondary path in process_tool_results (websocket.py) that
+intercepts function-call events from the ADK event stream.  The tool-based
+path fires first (ADK always calls the tool function), making persistence and
+WS notification guaranteed even if the event stream doesn't expose tool calls.
+"""
+
+from __future__ import annotations
+
+import logging
+from contextvars import ContextVar
+from typing import Any, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Per-connection context variables
+# Set once by websocket_endpoint() in websocket.py before running the session.
+# ---------------------------------------------------------------------------
+
+#: Current interview session ID — used by tools to persist results.
+_session_id_ctx: ContextVar[str] = ContextVar("rz_session_id", default="")
+
+#: Live WebSocket for this connection — used by signal_interview_end to push
+#: the terminal event directly to the frontend without going through the
+#: ADK event-stream.
+_websocket_ctx: ContextVar[Any] = ContextVar("rz_websocket", default=None)
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +91,6 @@ async def evaluate_answer(
         f"score={evaluation.score}/10 | next={evaluation.next_action}"
     )
 
-    # Build a clear brief for Aria to act on
     brief_lines = [
         f"=== ANSWER EVALUATION: Q{question_number} ===",
         f"Quality   : {evaluation.quality} ({evaluation.correctness_percent}% correct)",
@@ -70,7 +109,9 @@ async def evaluate_answer(
     elif evaluation.next_action == "GIVE_HINT":
         brief_lines.append(f"HINT TO GIVE   : {evaluation.hint}")
     elif evaluation.next_action == "NEXT_QUESTION":
-        brief_lines.append("THEN           : call record_score, then move to the next question in the bank.")
+        brief_lines.append(
+            "THEN           : call record_score, then move to the next question in the bank."
+        )
 
     return "\n".join(brief_lines)
 
@@ -94,7 +135,43 @@ async def record_score(
     Call this AFTER evaluate_answer and AFTER you have spoken the coaching note.
     Do NOT call this before speaking — the candidate hears your coaching first.
     """
-    logger.info(f"Score recorded: Q{question_number} = {score}/{max_score} (follow-up={is_followup})")
+    logger.info(
+        f"Score recorded: Q{question_number} = {score}/{max_score} "
+        f"(follow-up={is_followup})"
+    )
+
+    session_id = _session_id_ctx.get()
+    if session_id:
+        from app.services.session_service import SessionService
+
+        try:
+            await SessionService.append_question_result(
+                session_id,
+                {
+                    "question_number": question_number,
+                    "question_text": question_text or "",
+                    "user_answer": candidate_answer_summary or "",
+                    "ideal_answer": "",
+                    "score": int(score) if score is not None else 0,
+                    "max_score": int(max_score) if max_score is not None else 10,
+                    "feedback": feedback or "",
+                    "filler_word_count": 0,
+                    "emotion_log": {},
+                    "is_followup": bool(is_followup),
+                },
+            )
+        except Exception as exc:
+            logger.error(
+                f"record_score: failed to persist Q{question_number} "
+                f"for session {session_id!r}: {exc}"
+            )
+    else:
+        logger.warning(
+            "record_score called without a session context — "
+            "result will NOT be persisted. Check that _session_id_ctx is set "
+            "in websocket.py before starting the ADK session."
+        )
+
     return f"Score {score}/{max_score} recorded for question {question_number}."
 
 
@@ -117,7 +194,42 @@ async def signal_interview_end(
     Signal that the interview is complete. Call this ONCE after your verbal closing summary.
     This triggers the report card screen for the candidate.
     """
-    logger.info(f"Interview ended. Final score: {total_score}/{max_possible_score}")
+    logger.info(
+        f"Interview ended. Final score: {total_score}/{max_possible_score}"
+    )
+
+    ws = _websocket_ctx.get()
+    if ws is not None:
+        try:
+            await ws.send_json(
+                {
+                    "type": "interview_end",
+                    "data": {
+                        "total_score": int(total_score) if total_score is not None else 0,
+                        "max_possible_score": (
+                            int(max_possible_score)
+                            if max_possible_score is not None
+                            else 0
+                        ),
+                        "overall_feedback": overall_feedback or "",
+                        "strengths": list(strengths or []),
+                        "areas_for_improvement": list(areas_for_improvement or []),
+                    },
+                }
+            )
+            logger.info("interview_end event dispatched to frontend via tool context")
+        except Exception as exc:
+            # The WS may already be closing — non-fatal, the event-stream
+            # path in process_tool_results serves as the secondary attempt.
+            logger.warning(
+                f"signal_interview_end: WS send failed (connection may be closing): {exc}"
+            )
+    else:
+        logger.warning(
+            "signal_interview_end: WebSocket context not set — "
+            "interview_end will be sent by process_tool_results fallback only."
+        )
+
     return "Interview complete. Report card will be shown to the candidate."
 
 

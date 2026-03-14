@@ -24,24 +24,24 @@ steps:
       - "-c"
       - |
         SECRETS="GOOGLE_API_KEY=GOOGLE_API_KEY:latest"
-        SECRETS="$SECRETS,DATABASE_URL=DATABASE_URL:latest"
-        SECRETS="$SECRETS,JWT_SECRET=JWT_SECRET:latest"
-        SECRETS="$SECRETS,PINECONE_API_KEY=PINECONE_API_KEY:latest"
-        SECRETS="$SECRETS,UPSTASH_REDIS_REST_URL=UPSTASH_REDIS_REST_URL:latest"
-        SECRETS="$SECRETS,UPSTASH_REDIS_REST_TOKEN=UPSTASH_REDIS_REST_TOKEN:latest"
-        SECRETS="$SECRETS,SUPERMEMORY_API_KEY=SUPERMEMORY_API_KEY:latest"
-        SECRETS="$SECRETS,ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest"
-        SECRETS="$SECRETS,NEON_AUTH_JWKS_URL=NEON_AUTH_JWKS_URL:latest"
-        SECRETS="$SECRETS,NEON_AUTH_ISSUER=NEON_AUTH_ISSUER:latest"
-        SECRETS="$SECRETS,NEON_AUTH_AUDIENCE=NEON_AUTH_AUDIENCE:latest"
+        SECRETS="$$SECRETS,DATABASE_URL=DATABASE_URL:latest"
+        SECRETS="$$SECRETS,JWT_SECRET=JWT_SECRET:latest"
+        SECRETS="$$SECRETS,PINECONE_API_KEY=PINECONE_API_KEY:latest"
+        SECRETS="$$SECRETS,UPSTASH_REDIS_REST_URL=UPSTASH_REDIS_REST_URL:latest"
+        SECRETS="$$SECRETS,UPSTASH_REDIS_REST_TOKEN=UPSTASH_REDIS_REST_TOKEN:latest"
+        SECRETS="$$SECRETS,SUPERMEMORY_API_KEY=SUPERMEMORY_API_KEY:latest"
+        SECRETS="$$SECRETS,ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest"
+        SECRETS="$$SECRETS,NEON_AUTH_JWKS_URL=NEON_AUTH_JWKS_URL:latest"
+        SECRETS="$$SECRETS,NEON_AUTH_ISSUER=NEON_AUTH_ISSUER:latest"
+        SECRETS="$$SECRETS,NEON_AUTH_AUDIENCE=NEON_AUTH_AUDIENCE:latest"
 
         ENV_VARS="ENVIRONMENT=production"
-        ENV_VARS="$ENV_VARS,LOG_LEVEL=info"
-        ENV_VARS="$ENV_VARS,GOOGLE_GENAI_USE_VERTEXAI=FALSE"
-        ENV_VARS="$ENV_VARS,GEMINI_MODEL=gemini-2.5-flash-native-audio-preview-12-2025"
-        ENV_VARS="$ENV_VARS,USE_SUPERMEMORY=false"
-        ENV_VARS="$ENV_VARS,USE_REDIS=true"
-        ENV_VARS="$ENV_VARS,CORS_ALLOW_ORIGINS=https://your-app.vercel.app"
+        ENV_VARS="$$ENV_VARS,LOG_LEVEL=info"
+        ENV_VARS="$$ENV_VARS,GOOGLE_GENAI_USE_VERTEXAI=FALSE"
+        ENV_VARS="$$ENV_VARS,GEMINI_MODEL=gemini-2.5-flash-native-audio-preview-12-2025"
+        ENV_VARS="$$ENV_VARS,USE_SUPERMEMORY=true"
+        ENV_VARS="$$ENV_VARS,USE_REDIS=true"
+        ENV_VARS="$$ENV_VARS,CORS_ALLOW_ORIGINS=https://roundzero-xi.vercel.app"
 
         gcloud run deploy roundzero-backend \
           --image "gcr.io/$PROJECT_ID/roundzero-backend:latest" \
@@ -53,8 +53,8 @@ steps:
           --min-instances 1 \
           --concurrency 80 \
           --service-account "roundzero-cloudrun@$PROJECT_ID.iam.gserviceaccount.com" \
-          --set-secrets "$SECRETS" \
-          --set-env-vars "$ENV_VARS"
+          --set-secrets "$$SECRETS" \
+          --set-env-vars "$$ENV_VARS"
 
 images:
   - "gcr.io/$PROJECT_ID/roundzero-backend:latest"
