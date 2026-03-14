@@ -288,23 +288,19 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
     const duration = chunk.length / 24000;
     nextPlayTimeRef.current += duration;
 
-    // We don't wait for onended anymore for the next chunk, 
-    // we can schedule the whole queue ahead of time.
+    // Every source cleans itself out of activeSourcesRef when done.
+    // When the queue is empty and no sources remain, we stop speaking.
+    source.onended = () => {
+      activeSourcesRef.current = activeSourcesRef.current.filter(s => s !== source);
+      if (playbackQueueRef.current.length === 0 && activeSourcesRef.current.length === 0) {
+        isPlayingRef.current = false;
+        setIsAiSpeaking(false);
+      }
+    };
+
     if (playbackQueueRef.current.length > 0) {
       playNextChunk();
-    } else {
-        source.onended = () => {
-          // Remove from active sources
-          activeSourcesRef.current = activeSourcesRef.current.filter(s => s !== source);
-          
-          if (playbackQueueRef.current.length === 0 && activeSourcesRef.current.length === 0) {
-            isPlayingRef.current = false;
-            setIsAiSpeaking(false);
-          } else if (playbackQueueRef.current.length > 0) {
-            playNextChunk();
-          }
-        };
-      }
+    }
   }, []);
 
   const sendMessage = useCallback((data: object | string) => {

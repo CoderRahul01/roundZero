@@ -102,6 +102,7 @@ class ClaudeStrategyService:
         topic: str,
         difficulty: str,
         question_number: int,
+        ideal_answer: str = "",
     ) -> AnswerEvaluation:
         """
         Evaluate the candidate's answer and return structured coaching guidance.
@@ -130,6 +131,26 @@ class ClaudeStrategyService:
                 if raw.startswith("json"):
                     raw = raw[4:]
             data = json.loads(raw)
+
+            # Blend Gemini embedding semantic similarity into the score when an
+            # ideal answer is available. 70% Claude (qualitative) + 30% embedding
+            # (semantic alignment). This is best-effort — failures are silent.
+            if ideal_answer:
+                try:
+                    from app.services.embedding_service import GeminiEmbeddingService
+                    similarity = await GeminiEmbeddingService.semantic_similarity_score(
+                        candidate_answer, ideal_answer
+                    )
+                    if similarity is not None:
+                        embedding_score = similarity * 10  # 0–10 scale
+                        blended = round(0.7 * data["score"] + 0.3 * embedding_score)
+                        data["score"] = max(1, min(10, blended))
+                        data["score_explanation"] = (
+                            f"{data['score_explanation']} "
+                            f"[Semantic alignment: {similarity:.0%}]"
+                        )
+                except Exception as emb_exc:
+                    logger.debug(f"Embedding blend skipped: {emb_exc}")
 
             return AnswerEvaluation(
                 quality=data["quality"],

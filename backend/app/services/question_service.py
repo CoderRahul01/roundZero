@@ -58,26 +58,25 @@ class QuestionService:
             # Create a query string
             query_text = f"Interview questions for a {role} focusing on {', '.join(topics)}. Difficulty: {difficulty}"
             
-            # Resilient model lookup. text-embedding-004 is current SOTA.
-            model_name = "text-embedding-004"
+            # gemini-embedding-001: upgraded from text-embedding-004.
+            # output_dimensionality=768 keeps compatibility with existing Pinecone index.
+            model_name = "gemini-embedding-001"
             print(f"DEBUG: Attempting embedding with model '{model_name}'", flush=True)
-            
+
             try:
-                # Note: google-genai uses 'contents' (plural) for models.embed_content
                 res = client.models.embed_content(
                     model=model_name,
                     contents=[query_text],
-                    config={"task_type": "RETRIEVAL_QUERY"}
+                    config={"task_type": "RETRIEVAL_QUERY", "output_dimensionality": 768},
                 )
             except Exception as e:
-                # If 404/not found, try with models/ prefix or fallback to embedding-001
                 err_msg = str(e).lower()
                 if "404" in err_msg or "not found" in err_msg:
-                    print(f"DEBUG: Model '{model_name}' not found, trying 'embedding-001'", flush=True)
+                    print(f"DEBUG: Model '{model_name}' not found, falling back to 'text-embedding-004'", flush=True)
                     res = client.models.embed_content(
-                        model="embedding-001",
+                        model="text-embedding-004",
                         contents=[query_text],
-                        config={"task_type": "RETRIEVAL_QUERY"}
+                        config={"task_type": "RETRIEVAL_QUERY"},
                     )
                 else:
                     raise e
