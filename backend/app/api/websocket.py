@@ -10,41 +10,36 @@ Follows the official ADK 4-phase lifecycle:
 Reference: https://google.github.io/adk-docs/streaming/dev-guide/part1/
 """
 
-import json
 import asyncio
-import logging
+import json
+import time
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status, Request
-from app.core.gcp_logger import gcp_logger as logger
-from app.core.rate_limit import ws_limiter
-
-# ADK imports
+import google.genai.errors
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from google import adk
-from google.adk.agents import RunConfig, LiveRequestQueue
+from google.adk.agents import LiveRequestQueue, RunConfig
 from google.adk.agents.run_config import StreamingMode
 from google.adk.sessions import InMemorySessionService
 from google.genai import types as genai_types
-import google.genai.errors
 
 from app.agents.interviewer.agent import create_interviewer
-from app.services.session_service import SessionService
+from app.core.gcp_logger import gcp_logger as logger
+from app.core.rate_limit import ws_limiter
 from app.core.settings import get_settings
-
-import time
-from typing import List, Dict, Any
-
-logger = logging.getLogger(__name__)
+from app.services.session_service import SessionService
 
 INTERVIEW_DURATION_SECONDS = 10 * 60  # 10 minutes
 
 # ---------------------------------------------------------------------------
 # Helper: Tool Result Interception
 # ---------------------------------------------------------------------------
-async def process_tool_results(event, websocket: WebSocket, session_state: dict):
+async def process_tool_results(event, websocket: WebSocket, session_state: dict, session_id: str):
     """
     Intercept tool call results from the agent and forward relevant
     signals to the frontend.
     """
+    from app.services.session_service import SessionService
+
     calls = event.get_function_calls()
     if not calls:
         return
@@ -61,10 +56,25 @@ async def process_tool_results(event, websocket: WebSocket, session_state: dict)
                 "feedback": call.args.get("feedback"),
                 "is_followup": call.args.get("is_followup", False),
             }
-            # Update internal state if needed (ADK handles history, but we can track for UI)
             if "scores" not in session_state:
                 session_state["scores"] = []
             session_state["scores"].append(score_entry)
+
+            # Persist to Redis + Neon so ReportGenerator can read it
+            try:
+                await SessionService.save_question_result(session_id, {
+                    "question_text": call.args.get("question_text", ""),
+                    "user_answer": call.args.get("candidate_answer_summary", ""),
+                    "ideal_answer": "",
+                    "score": call.args.get("score", 0),
+                    "filler_word_count": 0,
+                    "emotion_log": {},
+                    "feedback": call.args.get("feedback", ""),
+                    "max_score": call.args.get("max_score", 10),
+                    "question_number": call.args.get("question_number"),
+                })
+            except Exception as e:
+                logger.error(f"Failed to persist score for session {session_id}: {e}")
 
             await websocket.send_json({
                 "type": "score_update",
@@ -107,9 +117,18 @@ router = APIRouter()
 # Should match the Agent.name property to avoid warnings
 APP_NAME = "interviewer"
 
-# Single in-memory session service shared across all WebSocket connections.
-# Replace with DatabaseSessionService for multi-replica production deployments.
-_adk_session_service = InMemorySessionService()
+# Use Redis-backed session service in production; fall back to in-memory if
+# Redis is not configured (e.g. local dev without Upstash credentials).
+def _build_session_service():
+    from app.core.redis_client import get_redis
+    from app.core.redis_session_service import RedisSessionService
+    if get_redis() is not None:
+        logger.info("Using RedisSessionService for ADK sessions")
+        return RedisSessionService()
+    logger.warning("Redis not available — falling back to InMemorySessionService (dev only)")
+    return InMemorySessionService()
+
+_adk_session_service = _build_session_service()
 
 # Runner is stateless and reusable across sessions — created once.
 # The agent inside is also stateless; individual system prompts are
@@ -182,7 +201,7 @@ async def websocket_endpoint(
         # We pass a mock request object just containing the client host
         mock_request = type('obj', (object,), {'url': type('obj', (object,), {'path': '/ws'}), 'client': type('obj', (object,), {'host': user_ip})})()
         await ws_limiter(mock_request, identifier=f"{user_id}")
-    except Exception as e:
+    except Exception:
         logger.warning(f"Connection rejected: Rate limit exceeded for user={user_id} ip={user_ip}")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
@@ -227,7 +246,7 @@ async def websocket_endpoint(
         if not session_data:
             logger.warning(f"No session data found for {session_id}, using defaults")
             session_data = {}
-            
+
         user_profile = session_data.get("user_profile") or {}
         if "id" not in user_profile:
             user_profile["id"] = user_id or session_data.get("user_id")
@@ -310,11 +329,11 @@ async def websocket_endpoint(
             try:
                 state = adk_session.state
                 start_time = state.get("start_time", time.time())
-                
+
                 while not state.get("ended", False):
                     elapsed = time.time() - start_time
                     remaining = INTERVIEW_DURATION_SECONDS - elapsed
-                    
+
                     if remaining <= 0:
                         state["ended"] = True
                         queue.send_content(genai_types.Content(
@@ -339,7 +358,7 @@ async def websocket_endpoint(
                             role="user",
                             parts=[genai_types.Part(text=f"[SYSTEM: {mins_left} minutes remaining]")]
                         ))
-                    
+
                     await asyncio.sleep(30)
             except Exception as e:
                 logger.debug(f"Timer task stopped for {session_id}: {e}")
@@ -468,7 +487,7 @@ async def websocket_endpoint(
                         await websocket.send_json({"type": "interrupt"})
 
                     # --- Tool calls and interception ---
-                    await process_tool_results(event, websocket, adk_session.state)
+                    await process_tool_results(event, websocket, adk_session.state, session_id)
 
                     calls = event.get_function_calls()
                     if calls:

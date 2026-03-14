@@ -95,7 +95,7 @@ class ReportGenerator:
         
         try:
             response = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model=settings.gemini_model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -118,9 +118,13 @@ class ReportGenerator:
                 logger.warning(f"Failed to save to Supermemory: {e}")
 
         # 5. Build Final Report Object
+        # Confidence: derive from avg score (score is 0-10, map to 0-100%)
+        max_score_per_q = results[0].get("max_score", 10) if results else 10
+        confidence_avg = round((avg_score / max_score_per_q) * 100) if max_score_per_q else avg_score
+
         return {
             "overallScore": avg_score,
-            "confidenceAvg": 75, # Mocked for now
+            "confidenceAvg": confidence_avg,
             "totalFillers": total_fillers,
             "questionsAnswered": len(results),
             "summary": summary_text,
@@ -128,7 +132,7 @@ class ReportGenerator:
                 {
                     "q": r.get("question_text"),
                     "score": r.get("score"),
-                    "feedback": r.get("feedback"),
+                    "feedback": r.get("feedback") or r.get("user_answer", ""),
                     "fillers": r.get("filler_word_count", 0)
                 } for r in results
             ],

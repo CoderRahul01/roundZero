@@ -30,27 +30,37 @@ export interface UseGeminiLiveReturn {
   resumeAudio: () => Promise<void>;
 }
 
-// Worklet code for mic capture - processes blocks and sends to main thread
+// Worklet code for mic capture.
+// Converts Float32 → Int16 PCM inside the worklet thread (off the main thread),
+// then transfers the Int16 ArrayBuffer to the main thread with zero copy.
+// Buffer size 512 samples @ 16 kHz = 32 ms latency per chunk.
 const MIC_PROCESSOR_WORKLET = `
   class MicProcessor extends AudioWorkletProcessor {
     constructor() {
       super();
-      this.bufferSize = 1024;
-      this.buffer = new Float32Array(this.bufferSize);
+      this.bufferSize = 512;
       this.bufferIndex = 0;
+      this.int16Buffer = new Int16Array(this.bufferSize);
     }
 
     process(inputs) {
       const input = inputs[0];
       if (!input || !input[0]) return true;
-      
+
       const channelData = input[0];
       for (let i = 0; i < channelData.length; i++) {
-        this.buffer[this.bufferIndex++] = channelData[i];
-        
+        // Clamp and convert Float32 → Int16 here, in the audio thread
+        const sample = Math.max(-1, Math.min(1, channelData[i]));
+        this.int16Buffer[this.bufferIndex++] = sample * 0x7FFF;
+
         if (this.bufferIndex >= this.bufferSize) {
-          // Send a copy of the buffer to the main thread
-          this.port.postMessage(this.buffer);
+          // Transfer ownership — zero-copy, no structured clone
+          this.port.postMessage(
+            { pcm: this.int16Buffer.buffer },
+            [this.int16Buffer.buffer]
+          );
+          // Allocate a fresh buffer (old one is now owned by the main thread)
+          this.int16Buffer = new Int16Array(this.bufferSize);
           this.bufferIndex = 0;
         }
       }
@@ -103,6 +113,7 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
   const isPlayingRef = useRef(false);
   const videoStreamRef = useRef<MediaStream | null>(null);
   const frameIntervalRef = useRef<number | null>(null);
+  const levelIntervalRef = useRef<number | null>(null);
 
   // Setup Mic AudioContext (16kHz) & AI Playback AudioContext (24kHz)
   const initAudio = useCallback(async () => {
@@ -146,28 +157,30 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
       
       const workletNode = new AudioWorkletNode(micCtxRef.current, 'mic-processor');
       source.connect(workletNode);
-      workletNode.connect(micCtxRef.current.destination);
+      // NOTE: do NOT connect workletNode to destination — mic audio must not
+      // play back through the speakers. The worklet node has no audio output;
+      // it only reads input and posts PCM to the main thread via its port.
       workletNodeRef.current = workletNode;
 
       workletNode.port.onmessage = (event) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
-          const inputData = event.data; // Float32Array of 1024 samples
-          // Convert Float32 to Int16 PCM
-          const pcmData = new Int16Array(inputData.length);
-          for (let i = 0; i < inputData.length; i++) {
-              pcmData[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
-          }
-          wsRef.current.send(pcmData.buffer);
-        }
-
-        // Update audio level for UI (using analyser)
-        if (analyserRef.current) {
-            const data = new Uint8Array(analyserRef.current.frequencyBinCount);
-            analyserRef.current.getByteFrequencyData(data);
-            const avg = data.reduce((a, b) => a + b) / data.length;
-            setAudioLevel(avg);
+          // event.data.pcm is an Int16 ArrayBuffer already converted in the
+          // worklet thread — send directly with zero additional allocation.
+          wsRef.current.send(event.data.pcm);
         }
       };
+
+      // Poll the analyser at 10 Hz for audio-level visualization.
+      // Decoupled from the hot PCM send path so neither blocks the other.
+      if (levelIntervalRef.current) clearInterval(levelIntervalRef.current);
+      levelIntervalRef.current = window.setInterval(() => {
+        if (analyserRef.current) {
+          const data = new Uint8Array(analyserRef.current.frequencyBinCount);
+          analyserRef.current.getByteFrequencyData(data);
+          const avg = data.reduce((a, b) => a + b, 0) / data.length;
+          setAudioLevel(avg);
+        }
+      }, 100);
     } catch (err) {
       console.error('Audio initialization failed:', err);
       setError('Microphone access denied or not supported.');
@@ -442,15 +455,18 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
   const stopSession = useCallback(() => {
     wsRef.current?.close();
     workletNodeRef.current?.disconnect();
-    
-    // Cleanup video (Phase 2)
+
+    if (levelIntervalRef.current) {
+      clearInterval(levelIntervalRef.current);
+      levelIntervalRef.current = null;
+    }
     if (frameIntervalRef.current) {
-        clearInterval(frameIntervalRef.current);
-        frameIntervalRef.current = null;
+      clearInterval(frameIntervalRef.current);
+      frameIntervalRef.current = null;
     }
     if (videoStreamRef.current) {
-        videoStreamRef.current.getTracks().forEach(t => t.stop());
-        videoStreamRef.current = null;
+      videoStreamRef.current.getTracks().forEach(t => t.stop());
+      videoStreamRef.current = null;
     }
 
     setIsConnected(false);

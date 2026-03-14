@@ -1,5 +1,5 @@
 steps:
-  # 1. Build the container image using Docker
+  # 1. Build the container image
   - name: "gcr.io/cloud-builders/docker"
     args:
       - "build"
@@ -9,27 +9,52 @@ steps:
       - "gcr.io/$PROJECT_ID/roundzero-backend:latest"
       - "."
 
-  # 2. Push the container image to Google Container Registry
+  # 2. Push to Google Container Registry
   - name: "gcr.io/cloud-builders/docker"
     args:
       - "push"
       - "gcr.io/$PROJECT_ID/roundzero-backend:latest"
 
-  # 3. Deploy the container to Google Cloud Run
+  # 3. Deploy to Cloud Run
+  # Uses a shell step so we can build the --set-secrets string cleanly
+  # without YAML folding issues. Update CORS_ALLOW_ORIGINS to your Vercel URL.
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
-    entrypoint: gcloud
+    entrypoint: bash
     args:
-      - "run"
-      - "deploy"
-      - "roundzero-backend" # Service name
-      - "--image"
-      - "gcr.io/$PROJECT_ID/roundzero-backend:latest"
-      - "--region"
-      - "us-central1" # Recommended region; change if needed
-      - "--allow-unauthenticated"
-      - "--session-affinity" # CRITICAL for WebSockets
-      - "--port"
-      - "8080"
+      - "-c"
+      - |
+        SECRETS="GOOGLE_API_KEY=GOOGLE_API_KEY:latest"
+        SECRETS="$SECRETS,DATABASE_URL=DATABASE_URL:latest"
+        SECRETS="$SECRETS,JWT_SECRET=JWT_SECRET:latest"
+        SECRETS="$SECRETS,PINECONE_API_KEY=PINECONE_API_KEY:latest"
+        SECRETS="$SECRETS,UPSTASH_REDIS_REST_URL=UPSTASH_REDIS_REST_URL:latest"
+        SECRETS="$SECRETS,UPSTASH_REDIS_REST_TOKEN=UPSTASH_REDIS_REST_TOKEN:latest"
+        SECRETS="$SECRETS,SUPERMEMORY_API_KEY=SUPERMEMORY_API_KEY:latest"
+        SECRETS="$SECRETS,ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest"
+        SECRETS="$SECRETS,NEON_AUTH_JWKS_URL=NEON_AUTH_JWKS_URL:latest"
+        SECRETS="$SECRETS,NEON_AUTH_ISSUER=NEON_AUTH_ISSUER:latest"
+        SECRETS="$SECRETS,NEON_AUTH_AUDIENCE=NEON_AUTH_AUDIENCE:latest"
+
+        ENV_VARS="ENVIRONMENT=production"
+        ENV_VARS="$ENV_VARS,LOG_LEVEL=info"
+        ENV_VARS="$ENV_VARS,GOOGLE_GENAI_USE_VERTEXAI=FALSE"
+        ENV_VARS="$ENV_VARS,GEMINI_MODEL=gemini-2.5-flash-native-audio-preview-12-2025"
+        ENV_VARS="$ENV_VARS,USE_SUPERMEMORY=false"
+        ENV_VARS="$ENV_VARS,USE_REDIS=true"
+        ENV_VARS="$ENV_VARS,CORS_ALLOW_ORIGINS=https://your-app.vercel.app"
+
+        gcloud run deploy roundzero-backend \
+          --image "gcr.io/$PROJECT_ID/roundzero-backend:latest" \
+          --region us-central1 \
+          --allow-unauthenticated \
+          --session-affinity \
+          --port 8080 \
+          --timeout 3600 \
+          --min-instances 1 \
+          --concurrency 80 \
+          --service-account "roundzero-cloudrun@$PROJECT_ID.iam.gserviceaccount.com" \
+          --set-secrets "$SECRETS" \
+          --set-env-vars "$ENV_VARS"
 
 images:
   - "gcr.io/$PROJECT_ID/roundzero-backend:latest"
