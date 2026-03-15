@@ -132,7 +132,14 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
         });
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,   // prevents AI speaker audio feeding back into mic
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
+      });
       const source = micCtxRef.current.createMediaStreamSource(stream);
       
       const analyser = micCtxRef.current.createAnalyser();
@@ -288,16 +295,24 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
     const duration = chunk.length / 24000;
     nextPlayTimeRef.current += duration;
 
-    // Every source cleans itself out of activeSourcesRef when done.
-    // When the queue is empty and no sources remain, we stop speaking.
     source.onended = () => {
       activeSourcesRef.current = activeSourcesRef.current.filter(s => s !== source);
-      if (playbackQueueRef.current.length === 0 && activeSourcesRef.current.length === 0) {
-        isPlayingRef.current = false;
-        setIsAiSpeaking(false);
+      // When all active sources finish, check if new chunks arrived while playing.
+      // If so, schedule them — otherwise stop. Without this, chunks that arrive
+      // between recursive calls sit in the queue forever (isPlayingRef stays true
+      // but nothing drives them forward), causing silent gaps.
+      if (activeSourcesRef.current.length === 0) {
+        if (playbackQueueRef.current.length > 0) {
+          isPlayingRef.current = false; // allow re-entry
+          playNextChunk();
+        } else {
+          isPlayingRef.current = false;
+          setIsAiSpeaking(false);
+        }
       }
     };
 
+    // Schedule any chunks already in the queue ahead of time (zero-gap playback).
     if (playbackQueueRef.current.length > 0) {
       playNextChunk();
     }
