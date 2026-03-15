@@ -99,7 +99,8 @@ export function InterviewScreen({
 }) {
   const [sessionStarted, setSessionStarted]   = useState(false);
   const [question, setQuestion]               = useState(config.first_question);
-  const [questionIndex, setQuestionIndex]     = useState(config.question_index);
+  // Always start at Q1 — API returns question_index:0 as a placeholder
+  const [questionIndex, setQuestionIndex]     = useState(1);
   const [questionKey, setQuestionKey]         = useState(0);
   const [aiMsg, setAiMsg]                     = useState("");
   const [confidence, setConfidence]           = useState(68);
