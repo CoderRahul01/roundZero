@@ -153,26 +153,51 @@ class SessionService:
                     session_id,
                     user_id,
                 )
-                await conn.execute(
-                    """
-                    INSERT INTO question_results (
-                        session_id, question_number, question_text,
-                        user_answer, ideal_answer, score, max_score,
-                        feedback, filler_word_count, emotion_log, created_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
-                    """,
-                    session_id,
-                    result.get("question_number"),
-                    result.get("question_text") or "",
-                    result.get("user_answer") or "",
-                    result.get("ideal_answer") or "",
-                    int(result["score"]) if result.get("score") is not None else 0,
-                    int(result.get("max_score") or 10),
-                    result.get("feedback") or "",
-                    int(result.get("filler_word_count") or 0),
-                    # Pass dict directly — asyncpg serialises JSONB natively
-                    result.get("emotion_log") or {},
-                )
+                # Try with question_number column first; fall back to schema
+                # without it if the column hasn't been migrated yet.
+                try:
+                    await conn.execute(
+                        """
+                        INSERT INTO question_results (
+                            session_id, question_number, question_text,
+                            user_answer, ideal_answer, score, max_score,
+                            feedback, filler_word_count, emotion_log, created_at
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+                        """,
+                        session_id,
+                        result.get("question_number"),
+                        result.get("question_text") or "",
+                        result.get("user_answer") or "",
+                        result.get("ideal_answer") or "",
+                        int(result["score"]) if result.get("score") is not None else 0,
+                        int(result.get("max_score") or 10),
+                        result.get("feedback") or "",
+                        int(result.get("filler_word_count") or 0),
+                        result.get("emotion_log") or {},
+                    )
+                except Exception as schema_exc:
+                    if "question_number" in str(schema_exc):
+                        # Column missing — insert without it (best-effort)
+                        await conn.execute(
+                            """
+                            INSERT INTO question_results (
+                                session_id, question_text,
+                                user_answer, ideal_answer, score, max_score,
+                                feedback, filler_word_count, emotion_log, created_at
+                            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+                            """,
+                            session_id,
+                            result.get("question_text") or "",
+                            result.get("user_answer") or "",
+                            result.get("ideal_answer") or "",
+                            int(result["score"]) if result.get("score") is not None else 0,
+                            int(result.get("max_score") or 10),
+                            result.get("feedback") or "",
+                            int(result.get("filler_word_count") or 0),
+                            result.get("emotion_log") or {},
+                        )
+                    else:
+                        raise
             finally:
                 await conn.close()
         except Exception as exc:

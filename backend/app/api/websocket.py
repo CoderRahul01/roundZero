@@ -293,7 +293,12 @@ async def websocket_endpoint(
         # error that silently kills the stream. Keep RunConfig minimal.
         run_config = RunConfig(
             streaming_mode=StreamingMode.BIDI,
-            tool_thread_pool_config=adk.agents.run_config.ToolThreadPoolConfig(max_workers=4),
+            # NOTE: ToolThreadPoolConfig is intentionally REMOVED.
+            # ADK's thread pool runs tools in new threads which do NOT inherit
+            # asyncio ContextVars (_session_id_ctx, _websocket_ctx), causing
+            # record_score to think it has no session context and skip persistence.
+            # All our tools are async def — they run inline in the event loop
+            # and properly inherit ContextVars without a thread pool.
             response_modalities=[genai_types.Modality.AUDIO] if is_native_audio else [genai_types.Modality.TEXT],
             speech_config=genai_types.SpeechConfig(
                 voice_config=genai_types.VoiceConfig(
