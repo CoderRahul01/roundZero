@@ -288,12 +288,13 @@ async def websocket_endpoint(
         is_native_audio = "native-audio" in settings.gemini_model.lower()
         voice_name = "Kore" if mode == "buddy" else "Charon"
 
+        # NOTE: context_window_compression and session_resumption are NOT
+        # supported by native-audio models — they cause a 1007 "invalid argument"
+        # error that silently kills the stream. Keep RunConfig minimal.
         run_config = RunConfig(
-            streaming_mode=StreamingMode.BIDI,            # ← Critical: enables WebSocket bidi
-            session_resumption=genai_types.SessionResumptionConfig(),
-            context_window_compression=genai_types.ContextWindowCompressionConfig(),
+            streaming_mode=StreamingMode.BIDI,
             tool_thread_pool_config=adk.agents.run_config.ToolThreadPoolConfig(max_workers=4),
-            response_modalities=["AUDIO"] if is_native_audio else ["TEXT"],
+            response_modalities=[genai_types.Modality.AUDIO] if is_native_audio else [genai_types.Modality.TEXT],
             speech_config=genai_types.SpeechConfig(
                 voice_config=genai_types.VoiceConfig(
                     prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(
