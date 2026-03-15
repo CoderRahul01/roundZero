@@ -110,11 +110,16 @@ class ClaudeStrategyService:
         """
         client = cls._get_client()
 
+        ideal_section = (
+            f"\n\nIdeal answer (reference only — score how well the candidate covered this): {ideal_answer}"
+            if ideal_answer else ""
+        )
         user_msg = (
             f"Topic: {topic}\n"
             f"Difficulty: {difficulty}\n"
             f"Question #{question_number}: {question}\n\n"
             f'Candidate answer: "{candidate_answer}"'
+            f"{ideal_section}"
         )
 
         try:

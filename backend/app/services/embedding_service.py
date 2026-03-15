@@ -22,10 +22,13 @@ from app.core.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
-# Stable Gemini embedding model. Produces 3072-dim vectors by default;
+# Latest multimodal embedding model. Produces vectors up to 3072-dim;
 # we pin output_dimensionality=768 to stay compatible with existing
 # Pinecone indexes built with text-embedding-004.
-EMBEDDING_MODEL = "gemini-embedding-001"
+# NOTE: only used for semantic similarity scoring (fresh embeds each call),
+# NOT for Pinecone RAG retrieval — QuestionService still uses gemini-embedding-001
+# to stay compatible with stored index vectors.
+EMBEDDING_MODEL = "gemini-embedding-2-preview"
 EMBEDDING_DIM = 768
 
 

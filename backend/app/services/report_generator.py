@@ -114,7 +114,7 @@ class ReportGenerator:
             "breakdown": [
                 {
                     "q": r.get("question_text"),
-                    "score": r.get("score"),
+                    "score": min(100, int(r.get("score") or 0) * 10),
                     "feedback": r.get("feedback") or r.get("user_answer", ""),
                     "fillers": r.get("filler_word_count", 0)
                 } for r in results

@@ -1,16 +1,9 @@
-print("  QuestionService: importing os...", flush=True)
 import os
-print("  QuestionService: importing logging...", flush=True)
 import logging
-print("  QuestionService: importing typing...", flush=True)
 from typing import List, Dict, Any
-print("  QuestionService: importing google.genai...", flush=True)
 from google import genai
-print("  QuestionService: importing pinecone...", flush=True)
 from pinecone import Pinecone
-print("  QuestionService: importing app.core.settings...", flush=True)
 from app.core.settings import get_settings
-print("  QuestionService: imports done.", flush=True)
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +17,7 @@ class QuestionService:
             settings = get_settings()
             if not settings.google_api_key or not os.getenv("PINECONE_API_KEY"):
                 return None
-            
+
             try:
                 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
                 cls._pc_index = pc.Index(os.getenv("PINECONE_INDEX", "interview-questions"))
@@ -49,7 +42,7 @@ class QuestionService:
         """
         index = cls._get_pinecone_index()
         client = cls._get_genai_client()
-        
+
         if not index or not client:
             logger.warning("Pinecone or Gemini Client not configured. Falling back to static questions.")
             return cls._get_static_questions(role, difficulty)
@@ -57,11 +50,10 @@ class QuestionService:
         try:
             # Create a query string
             query_text = f"Interview questions for a {role} focusing on {', '.join(topics)}. Difficulty: {difficulty}"
-            
+
             # gemini-embedding-001: upgraded from text-embedding-004.
             # output_dimensionality=768 keeps compatibility with existing Pinecone index.
             model_name = "gemini-embedding-001"
-            print(f"DEBUG: Attempting embedding with model '{model_name}'", flush=True)
 
             try:
                 res = client.models.embed_content(
@@ -72,7 +64,7 @@ class QuestionService:
             except Exception as e:
                 err_msg = str(e).lower()
                 if "404" in err_msg or "not found" in err_msg:
-                    print(f"DEBUG: Model '{model_name}' not found, falling back to 'text-embedding-004'", flush=True)
+                    logger.warning(f"Model '{model_name}' not found, falling back to 'text-embedding-004'")
                     res = client.models.embed_content(
                         model="text-embedding-004",
                         contents=[query_text],
@@ -82,7 +74,7 @@ class QuestionService:
                     raise e
 
             embedding = res.embeddings[0].values
-            
+
             # Search Pinecone
             search_res = index.query(
                 vector=embedding,
@@ -90,7 +82,7 @@ class QuestionService:
                 include_metadata=True,
                 filter={"difficulty": {"$eq": difficulty}} if difficulty else None
             )
-            
+
             questions = []
             for match in search_res.matches:
                 meta = match.metadata
@@ -100,10 +92,10 @@ class QuestionService:
                     "category": meta.get("category", ""),
                     "difficulty": meta.get("difficulty", "")
                 })
-            
+
             if not questions:
                 return cls._get_static_questions(role, difficulty)
-                
+
             return questions
 
         except Exception as e:

@@ -356,9 +356,9 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
     playbackCtxRef.current.resume().catch(() => {});
 
     // For WebSocket, connect directly to backend — bypass Vite proxy
-    const wsBase = baseUrl.includes('localhost:3000')
+    const wsBase = (baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1'))
       ? 'ws://localhost:8080'
-      : baseUrl.replace('http', 'ws');
+      : baseUrl.replace('https://', 'wss://').replace('http://', 'ws://');
     const wsUrl = `${wsBase}/ws/${userId}/${sessionId}?mode=${mode}${token ? `&token=${token}` : ''}`;
 
     const ws = new WebSocket(wsUrl);

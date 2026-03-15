@@ -186,7 +186,34 @@ async def get_score_table() -> str:
     Retrieve the running score summary before delivering your closing verbal summary.
     Call this ONCE at the very end, just before signal_interview_end.
     """
-    return "Score table retrieved. Use it to inform your closing verbal summary."
+    session_id = _session_id_ctx.get()
+    if not session_id:
+        return "Score table unavailable — session context missing."
+
+    from app.services.session_service import SessionService
+    try:
+        results = await SessionService.get_session_results(session_id)
+    except Exception as exc:
+        logger.warning(f"get_score_table: failed to load results: {exc}")
+        return "Score table temporarily unavailable."
+
+    if not results:
+        return "No scores recorded yet."
+
+    lines = ["=== RUNNING SCORE TABLE ==="]
+    total, max_total = 0, 0
+    for r in results:
+        q_num = r.get("question_number", "?")
+        score = int(r.get("score") or 0)
+        max_score = int(r.get("max_score") or 10)
+        total += score
+        max_total += max_score
+        feedback_snippet = (r.get("feedback") or "")[:80]
+        lines.append(f"Q{q_num}: {score}/{max_score}  — {feedback_snippet}")
+
+    pct = round(total / max_total * 100) if max_total else 0
+    lines.append(f"\nTOTAL: {total}/{max_total}  ({pct}%)")
+    return "\n".join(lines)
 
 
 async def signal_interview_end(
