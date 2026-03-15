@@ -596,15 +596,19 @@ export function SetupScreen({ onStart }: { onStart: (cfg: LiveSessionConfig) => 
                     {[
                       {
                         key: "buddy",
-                        label: "🤝 Buddy Mode",
-                        desc: "Friendly, encouraging. Gets easier on low confidence.",
+                        label: "Buddy Mode",
+                        tag: "Supportive",
+                        tagColor: G.accent,
+                        desc: "Hints when you struggle, warm corrections, and genuine encouragement. AI explains answers you miss so you actually learn.",
                       },
                       {
                         key: "strict",
-                        label: "🎯 Strict Mode",
-                        desc: "Cold, formal. FAANG-style pressure. No mercy.",
+                        label: "Strict Mode",
+                        tag: "FAANG Pressure",
+                        tagColor: G.accent3,
+                        desc: "No hints. No sugarcoating. Push back on every vague answer. Exactly what a real top-tier interview feels like.",
                       },
-                    ].map(({ key, label, desc }) => (
+                    ].map(({ key, label, tag, tagColor, desc }) => (
                       <button
                         key={key}
                         onClick={() => setMode(key as "buddy" | "strict")}
@@ -619,8 +623,15 @@ export function SetupScreen({ onStart }: { onStart: (cfg: LiveSessionConfig) => 
                           transition: "all 0.2s",
                         }}
                       >
-                        <div style={{ fontSize: "0.95rem", fontWeight: 600, marginBottom: "0.4rem" }}>{label}</div>
-                        <div style={{ fontSize: "0.75rem", color: G.muted, lineHeight: 1.4 }}>{desc}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.45rem" }}>
+                          <span style={{ fontSize: "0.95rem", fontWeight: 700 }}>{label}</span>
+                          <span style={{
+                            fontFamily: G.mono, fontSize: "0.5rem", letterSpacing: "0.1em",
+                            color: tagColor, border: `1px solid ${tagColor}44`,
+                            padding: "1px 6px", textTransform: "uppercase",
+                          }}>{tag}</span>
+                        </div>
+                        <div style={{ fontSize: "0.75rem", color: G.muted, lineHeight: 1.5 }}>{desc}</div>
                       </button>
                     ))}
                   </div>

@@ -26,6 +26,24 @@ const ANIM_CSS = `
   0%,100% { transform: scaleY(0.35); }
   50%     { transform: scaleY(1);    }
 }
+@keyframes q-new-flash {
+  0%,100% { background: transparent; box-shadow: none; }
+  25%,75% { background: rgba(110,231,183,0.12); box-shadow: 0 0 14px rgba(110,231,183,0.2); }
+}
+@keyframes badge-pop {
+  0%   { opacity: 0; transform: translateY(-5px) scale(0.9); }
+  12%  { opacity: 1; transform: translateY(0) scale(1); }
+  75%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes complete-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
 `;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -95,6 +113,10 @@ export function InterviewScreen({
   // Simple 1-second interval counters — no ref arithmetic that can overflow
   const [aiSpeakSec, setAiSpeakSec]           = useState(0);
   const [userSpeakSec, setUserSpeakSec]       = useState(0);
+  // Flash when a new question arrives
+  const [isNewQuestion, setIsNewQuestion]     = useState(false);
+  // Interview completion overlay (shows before navigating to report)
+  const [interviewEnded, setInterviewEnded]   = useState(false);
 
   const videoRef               = useRef<HTMLVideoElement>(null);
   const screenVideoRef         = useRef<HTMLVideoElement>(null);
@@ -146,7 +168,7 @@ export function InterviewScreen({
     onEmotion: (emo, conf) => { setEmotion(emo); setConfidence(conf); },
     onInterrupt: () => {},
     onComplete: (data) => {
-      if (data.is_finished || data.type === "interview_end") handleEnd();
+      if (data.is_finished || data.type === "interview_end") handleInterviewComplete();
     },
     onScreenShareRequest: () => { if (!isScreenSharingRef.current) toggleScreenShareRef.current(); },
     onScreenShareStop:    () => { if (isScreenSharingRef.current)  toggleScreenShareRef.current(); },
@@ -194,6 +216,14 @@ export function InterviewScreen({
     const id = setInterval(() => setElapsed(v => v + 1), 1000);
     return () => clearInterval(id);
   }, []);
+
+  // ── New question flash ─────────────────────────────────────────────────────
+  useEffect(() => {
+    if (questionKey === 0) return; // skip initial mount
+    setIsNewQuestion(true);
+    const t = setTimeout(() => setIsNewQuestion(false), 2500);
+    return () => clearTimeout(t);
+  }, [questionKey]);
 
   // ── Auto-scroll transcript ─────────────────────────────────────────────────
   useEffect(() => {
@@ -285,11 +315,26 @@ export function InterviewScreen({
     return () => cancelAnimationFrame(raf);
   }, [isConnected, isAiSpeaking, audioLevel, isUserSpeaking]);
 
-  const handleEnd = async () => {
+  // Called by Quit button — immediate exit
+  const handleQuit = async () => {
     if (screenFrameIntervalRef.current) { clearInterval(screenFrameIntervalRef.current); screenFrameIntervalRef.current = null; }
     stopSession();
     try { await endSession(config.session_id); } finally { onEnd(); }
   };
+
+  // Called when AI signals interview_end — show completion overlay first
+  const handleInterviewComplete = () => {
+    if (interviewEnded) return; // guard against double-fire
+    setInterviewEnded(true);
+    if (screenFrameIntervalRef.current) { clearInterval(screenFrameIntervalRef.current); screenFrameIntervalRef.current = null; }
+    stopSession();
+    setTimeout(async () => {
+      try { await endSession(config.session_id); } finally { onEnd(); }
+    }, 3500);
+  };
+
+  // Back-compat alias so stopSessionRef still works
+  const handleEnd = handleQuit;
 
   // ── Orb appearance ─────────────────────────────────────────────────────────
   const orbColor = isAiSpeaking ? G.accent : isUserSpeaking ? "#34d399" : G.border;
@@ -346,7 +391,7 @@ export function InterviewScreen({
           <div style={{ fontFamily: G.mono, fontSize: "0.85rem", fontWeight: 600, color: elapsed > 2400 ? G.accent3 : G.text, letterSpacing: "0.05em" }}>
             {fmtTime(elapsed)}
           </div>
-          <button onClick={handleEnd} style={{
+          <button onClick={handleQuit} style={{
             padding: "3px 10px", background: "transparent",
             border: `1px solid ${G.border}`, color: G.accent3,
             fontFamily: G.font, fontSize: "0.72rem", cursor: "pointer", fontWeight: 600,
@@ -388,6 +433,7 @@ export function InterviewScreen({
                       padding: "4px 7px",
                       background: cur ? `${G.accent2}0e` : "transparent",
                       border: `1px solid ${cur ? G.accent2 + "44" : G.border}`,
+                      animation: cur && isNewQuestion ? "q-new-flash 2.5s ease" : "none",
                     }}>
                       <div style={{
                         width: 16, height: 16, borderRadius: "50%", flexShrink: 0,
@@ -441,11 +487,26 @@ export function InterviewScreen({
 
             {/* Question — clean area, no background animation */}
             <div style={{ flexShrink: 0, textAlign: "center" }}>
+              {/* "NEW QUESTION" badge — flashes in for 2.5s on each transition */}
+              {isNewQuestion && (
+                <div key={`badge-${questionKey}`} style={{
+                  display: "inline-flex", alignItems: "center", gap: 5,
+                  background: `${G.accent}18`, border: `1px solid ${G.accent}55`,
+                  padding: "2px 10px", borderRadius: 12, marginBottom: "0.45rem",
+                  fontFamily: G.mono, fontSize: "0.53rem", color: G.accent,
+                  letterSpacing: "0.18em", textTransform: "uppercase",
+                  animation: "badge-pop 2.5s ease forwards",
+                }}>
+                  <span style={{ width: 4, height: 4, borderRadius: "50%", background: G.accent, display: "inline-block" }} />
+                  New Question
+                </div>
+              )}
               <div style={{
-                fontFamily: G.mono, fontSize: "0.58rem", color: G.accent,
+                fontFamily: G.mono, fontSize: "0.58rem", color: isNewQuestion ? G.accent : G.muted,
                 letterSpacing: "0.25em", textTransform: "uppercase", marginBottom: "0.6rem",
+                transition: "color 0.4s",
               }}>
-                Current Question
+                {isNewQuestion ? `Question ${questionIndex} of ${config.total_questions}` : "Current Question"}
               </div>
               <div
                 key={questionKey}
@@ -673,7 +734,50 @@ export function InterviewScreen({
         </div>
       </div>
 
-      {/* ── OVERLAY ─────────────────────────────────────────────────────────── */}
+      {/* ── INTERVIEW COMPLETE OVERLAY ──────────────────────────────────────── */}
+      {interviewEnded && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 200,
+          background: "rgba(5,5,8,0.96)",
+          display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: "center", gap: "1.4rem",
+          backdropFilter: "blur(12px)",
+          animation: "complete-in 0.5s ease",
+        }}>
+          {/* Circle with checkmark */}
+          <div style={{
+            width: 80, height: 80, borderRadius: "50%",
+            border: `2px solid ${G.accent}`,
+            background: `radial-gradient(circle at 38% 35%, ${G.accent}18, transparent)`,
+            boxShadow: `0 0 40px ${G.accent}33`,
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+              <polyline points="6,16 13,23 26,9" stroke={G.accent} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+
+          <div style={{ fontWeight: 800, fontSize: "2rem", color: G.text, letterSpacing: "-0.03em" }}>
+            Interview <span style={{ color: G.accent }}>Complete</span>
+          </div>
+
+          <p style={{ color: G.muted, fontSize: "0.9rem", textAlign: "center", maxWidth: 360, lineHeight: 1.6, margin: 0 }}>
+            Great session. Compiling your performance report and scorecard…
+          </p>
+
+          {/* Spinner dots */}
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            {[0, 0.3, 0.6].map((delay, i) => (
+              <div key={i} style={{
+                width: 6, height: 6, borderRadius: "50%", background: G.accent,
+                animation: `bar-dance 1s ease-in-out ${delay}s infinite alternate`,
+                opacity: 0.7,
+              }} />
+            ))}
+          </div>
+        </div>
+      )}
+
       {!sessionStarted && (
         <div style={{
           position: "fixed", inset: 0, zIndex: 100,
