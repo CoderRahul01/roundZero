@@ -26,6 +26,8 @@ WS notification guaranteed even if the event stream doesn't expose tool calls.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from contextvars import ContextVar
 from typing import Any, List, Optional
@@ -96,6 +98,34 @@ async def evaluate_answer(
         f"Answer evaluated: Q{question_number} | quality={evaluation.quality} "
         f"score={evaluation.score}/10 | next={evaluation.next_action}"
     )
+
+    # Belt-and-suspenders: persist a provisional result immediately so the
+    # report works even if Aria skips calling record_score.
+    # Key: session_eval:{session_id}:{question_number} — one entry per question,
+    # no duplicates.  record_score will later append to the main list with the
+    # human-chosen feedback wording, but the report falls back to these keys.
+    session_id = _session_id_ctx.get()
+    if session_id:
+        try:
+            from app.core.redis_client import get_redis
+            redis = get_redis()
+            if redis:
+                provisional = {
+                    "question_number": question_number,
+                    "question_text": question_text or "",
+                    "user_answer": candidate_answer or "",
+                    "ideal_answer": ideal_answer or "",
+                    "score": evaluation.score,
+                    "max_score": 10,
+                    "feedback": evaluation.coaching_note or "",
+                    "filler_word_count": 0,
+                    "emotion_log": {},
+                }
+                key = f"session_eval:{session_id}:{question_number}"
+                await asyncio.to_thread(redis.setex, key, 7200, json.dumps(provisional))
+                logger.debug(f"evaluate_answer: provisional score persisted for Q{question_number}")
+        except Exception as exc:
+            logger.debug(f"evaluate_answer: provisional persist skipped: {exc}")
 
     brief_lines = [
         f"=== ANSWER EVALUATION: Q{question_number} ===",
@@ -177,6 +207,26 @@ async def record_score(
             "result will NOT be persisted. Check that _session_id_ctx is set "
             "in websocket.py before starting the ADK session."
         )
+
+    # Notify the frontend that a new question is starting so the question
+    # text panel updates immediately without waiting for Aria's next speech.
+    ws = _websocket_ctx.get()
+    if ws and session_id:
+        try:
+            from app.services.session_service import SessionService
+            session_data = await SessionService.get_session(session_id)
+            questions = session_data.get("questions", [])
+            next_idx = question_number  # question_number is 1-indexed; next question is at index question_number
+            if next_idx < len(questions):
+                next_q = questions[next_idx]
+                await ws.send_json({
+                    "type": "question_change",
+                    "question_number": question_number + 1,
+                    "question_text": next_q.get("question", ""),
+                })
+                logger.debug(f"record_score: sent question_change for Q{question_number + 1}")
+        except Exception as exc:
+            logger.debug(f"record_score: question_change send failed: {exc}")
 
     return f"Score {score}/{max_score} recorded for question {question_number}."
 

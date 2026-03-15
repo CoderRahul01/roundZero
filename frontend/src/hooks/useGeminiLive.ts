@@ -403,6 +403,9 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
         if (data.type === 'score_update') {
             onAgentEvent?.(data);
         }
+        if (data.type === 'question_change') {
+            onAgentEvent?.(data);
+        }
         if (data.type === 'screen_share') {
             if (data.action === 'request') onScreenShareRequest?.();
             else if (data.action === 'stop') onScreenShareStop?.();

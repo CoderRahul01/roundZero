@@ -278,6 +278,33 @@ class SessionService:
                 f"get_session_results: Neon fallback failed for {session_id}: {exc}"
             )
 
+        # 4. Provisional eval cache — written by evaluate_answer tool as a
+        #    belt-and-suspenders when Aria skips calling record_score.
+        #    Key pattern: session_eval:{session_id}:{question_number}
+        if redis:
+            try:
+                pattern = f"session_eval:{session_id}:*"
+                keys = await asyncio.to_thread(redis.keys, pattern)
+                if keys:
+                    results_by_q: dict = {}
+                    for key in keys:
+                        raw = await asyncio.to_thread(redis.get, key)
+                        if raw:
+                            r = json.loads(raw)
+                            qnum = r.get("question_number", 0)
+                            results_by_q[qnum] = r
+                    if results_by_q:
+                        logger.info(
+                            f"get_session_results: loaded {len(results_by_q)} provisional "
+                            f"eval entries for {session_id}"
+                        )
+                        return [results_by_q[k] for k in sorted(results_by_q.keys())]
+            except Exception as exc:
+                logger.error(
+                    f"get_session_results: provisional eval cache fallback failed "
+                    f"for {session_id}: {exc}"
+                )
+
         return []
 
     # ------------------------------------------------------------------

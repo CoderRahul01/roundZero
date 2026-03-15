@@ -174,6 +174,12 @@ export function InterviewScreen({
     onScreenShareRequest: () => { if (!isScreenSharingRef.current) toggleScreenShareRef.current(); },
     onScreenShareStop:    () => { if (isScreenSharingRef.current)  toggleScreenShareRef.current(); },
     onAgentEvent: (data) => {
+      // Backend sends question_change when record_score is called — update panel immediately
+      if (data.type === "question_change") {
+        setQuestionIndex(data.question_number);
+        setQuestion(data.question_text);
+        setQuestionKey(k => k + 1);
+      }
       if (data.type === "tool_call") {
         const { name, args } = data.payload ?? {};
         if (name === "sync_interview_state") {
@@ -182,10 +188,13 @@ export function InterviewScreen({
           setQuestionKey(k => k + 1);
         }
       }
+      // score_update: backend sends { type, data: { question_number, score, ... } }
       if (data.type === "score_update") {
-        const { question_index, score } = data.payload ?? {};
-        if (question_index != null && score != null) {
-          setQuestionScores(prev => ({ ...prev, [question_index]: Math.round(score) }));
+        const entry = data.data ?? {};
+        const { question_number, score } = entry;
+        if (question_number != null && score != null) {
+          // score is 0-10; display as 0-100%
+          setQuestionScores(prev => ({ ...prev, [question_number - 1]: Math.round(score * 10) }));
         }
       }
     },
