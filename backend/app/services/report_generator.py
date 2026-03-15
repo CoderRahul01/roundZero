@@ -78,7 +78,7 @@ class ReportGenerator:
         
         try:
             response = client.models.generate_content(
-                model=settings.gemini_model,
+                model="gemini-2.0-flash-001",  # text model — native-audio model doesn't support structured output
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -106,7 +106,7 @@ class ReportGenerator:
         confidence_avg = round((avg_score / max_score_per_q) * 100) if max_score_per_q else avg_score
 
         return {
-            "overallScore": avg_score,
+            "overallScore": min(100, avg_score * 10),  # scores are 0-10; convert to 0-100
             "confidenceAvg": confidence_avg,
             "totalFillers": total_fillers,
             "questionsAnswered": len(results),
