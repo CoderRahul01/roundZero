@@ -1,11 +1,16 @@
+import asyncio
+import json
+
 import uvicorn
 from dotenv import load_dotenv
+
 load_dotenv()
 
-from fastapi import FastAPI
-from app.core.settings import get_settings
-from app.core.middleware import JWTAuthMiddleware, CORSASGIMiddleware
+from fastapi import FastAPI, Response
+
 from app.core.gcp_logger import gcp_logger as logger
+from app.core.middleware import CORSASGIMiddleware, JWTAuthMiddleware
+from app.core.settings import get_settings
 
 
 class DiagnosticMiddleware:
@@ -23,7 +28,7 @@ class DiagnosticMiddleware:
             logger.info(f"DIAGNOSTIC WS: Path={scope.get('path')} Query={safe_query}")
             logger.info(f"DIAGNOSTIC WS: Origin={headers.get('origin', 'NONE')}")
         elif scope["type"] == "http":
-            user_ip = scope.get("client", ["unknown"])[0] 
+            user_ip = scope.get("client", ["unknown"])[0]
             logger.info(
                 f"DIAGNOSTIC HTTP: {scope.get('method')} {scope.get('path')} from {user_ip}",
                 extra={"extra_data": {"http_method": scope.get('method'), "path": scope.get("path"), "client_ip": user_ip}}
@@ -32,8 +37,6 @@ class DiagnosticMiddleware:
 
 
 def create_app() -> FastAPI:
-    settings = get_settings()
-    
     # Core FastAPI app (no middleware added via add_middleware — see below)
     fastapi_app = FastAPI(
         title="RoundZero Gemini Live API",
@@ -47,13 +50,49 @@ def create_app() -> FastAPI:
 
     @fastapi_app.get("/ready")
     async def ready_check():
-        return {"status": "ready"}
+        checks: dict = {}
+
+        # Redis probe
+        try:
+            from app.core.redis_client import get_redis
+            redis = get_redis()
+            if redis:
+                await asyncio.wait_for(asyncio.to_thread(redis.ping), timeout=2.0)
+                checks["redis"] = "ok"
+            else:
+                checks["redis"] = "unconfigured"
+        except Exception as e:
+            checks["redis"] = f"error: {e}"
+
+        # DB probe (best-effort, skip if not configured)
+        try:
+            cfg = get_settings()
+            if cfg.database_url:
+                import asyncpg  # type: ignore
+                conn = await asyncio.wait_for(
+                    asyncpg.connect(cfg.database_url, timeout=3.0), timeout=4.0
+                )
+                await conn.close()
+                checks["db"] = "ok"
+            else:
+                checks["db"] = "unconfigured"
+        except Exception as e:
+            checks["db"] = f"error: {e}"
+
+        degraded = any(v.startswith("error:") for v in checks.values())
+        if degraded:
+            return Response(
+                content=json.dumps({"status": "degraded", "checks": checks}),
+                status_code=503,
+                media_type="application/json",
+            )
+        return {"status": "ready", "checks": checks}
 
     # Register Routers
-    from app.api.routes import router as api_router
     from app.api.profile import router as profile_router
+    from app.api.routes import router as api_router
     from app.api.websocket import router as websocket_router
-    
+
     fastapi_app.include_router(api_router)
     fastapi_app.include_router(profile_router)
     fastapi_app.include_router(websocket_router)

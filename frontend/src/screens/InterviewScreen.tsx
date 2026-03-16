@@ -44,6 +44,18 @@ const ANIM_CSS = `
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }
+@keyframes ai-card-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes blink {
+  0%,100% { opacity: 1; }
+  50%     { opacity: 0; }
+}
+@keyframes dot-pulse {
+  0%,100% { opacity: 1; transform: scale(1); }
+  50%     { opacity: 0.4; transform: scale(0.8); }
+}
 `;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -90,6 +102,55 @@ function StatePill({ state, isConnected }: { state: SpeakState; isConnected: boo
   );
 }
 
+// ─── AI Speech Card ───────────────────────────────────────────────────────────
+function AiSpeechCard({ text, isActive }: { text: string; isActive: boolean }) {
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+      {/* Header row */}
+      <div style={{
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        padding: "0.55rem 0.9rem 0.3rem", flexShrink: 0,
+      }}>
+        <span style={{ fontFamily: G.mono, fontSize: "0.52rem", color: G.muted, textTransform: "uppercase", letterSpacing: "0.18em" }}>
+          Aria
+        </span>
+        <span style={{
+          width: 6, height: 6, borderRadius: "50%", display: "inline-block",
+          background: isActive ? G.accent : G.muted,
+          boxShadow: isActive ? `0 0 6px ${G.accent}` : "none",
+          animation: isActive ? "dot-pulse 1.2s ease-in-out infinite" : "none",
+          transition: "background 0.3s, box-shadow 0.3s",
+        }} />
+      </div>
+      {/* Body */}
+      <div style={{
+        flex: 1, overflowY: "auto", padding: "0.3rem 0.9rem 0.8rem",
+        marginLeft: "0.5rem",
+        borderLeft: isActive ? `2px solid ${G.accent}` : `2px solid ${G.border}`,
+        transition: "border-left-color 0.3s",
+        animation: "ai-card-in 0.3s ease",
+      }}>
+        {text ? (
+          <p style={{ fontSize: "0.88rem", lineHeight: 1.7, color: G.text, margin: 0 }}>
+            {text}
+            {isActive && (
+              <span style={{
+                display: "inline-block", width: 2, height: "0.9em",
+                background: G.accent, marginLeft: 3, verticalAlign: "text-bottom",
+                animation: "blink 1.1s step-end infinite",
+              }} />
+            )}
+          </p>
+        ) : (
+          <span style={{ fontSize: "0.78rem", color: G.muted, fontStyle: "italic" }}>
+            Aria will speak here…
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 export function InterviewScreen({
   config, onEnd,
@@ -118,18 +179,18 @@ export function InterviewScreen({
   const [isNewQuestion, setIsNewQuestion]     = useState(false);
   // Interview completion overlay (shows before navigating to report)
   const [interviewEnded, setInterviewEnded]   = useState(false);
+  // Key that increments each time AI starts speaking — triggers card entrance animation
+  const [aiMsgKey, setAiMsgKey]               = useState(0);
 
   const videoRef               = useRef<HTMLVideoElement>(null);
   const screenVideoRef         = useRef<HTMLVideoElement>(null);
   const screenStreamRef        = useRef<MediaStream | null>(null);
   const screenFrameIntervalRef = useRef<number | null>(null);
-  const waveCanvasRef          = useRef<HTMLCanvasElement>(null);
   const isScreenSharingRef     = useRef(false);
   // Only send screen frames to AI after request_screen_share tool fires.
   // Prevents arbitrary desktop content from being processed as an answer.
   const screenAIEnabledRef     = useRef(false);
   const toggleScreenShareRef   = useRef<() => Promise<void>>(() => Promise.resolve());
-  const transcriptEndRef       = useRef<HTMLDivElement>(null);
 
   // ── Transcript ─────────────────────────────────────────────────────────────
   const onTranscriptUpdate = useCallback((text: string) => {
@@ -246,10 +307,10 @@ export function InterviewScreen({
     return () => clearTimeout(t);
   }, [questionKey]);
 
-  // ── Auto-scroll transcript ─────────────────────────────────────────────────
+  // ── AI speech card key — re-triggers entrance animation on each new AI turn
   useEffect(() => {
-    transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [userTranscript]);
+    if (isAiSpeaking) setAiMsgKey(k => k + 1);
+  }, [isAiSpeaking]);
 
   // ── Camera preview ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -307,36 +368,6 @@ export function InterviewScreen({
   useEffect(() => { stopSessionRef.current = stopSession; }, [stopSession]);
   useEffect(() => () => stopSessionRef.current(), []);
 
-  // ── Waveform canvas ────────────────────────────────────────────────────────
-  useEffect(() => {
-    const canvas = waveCanvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    let raf = 0;
-    const bars = 44;
-    const draw = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const bw = canvas.width / bars - 1.5;
-      const color = isAiSpeaking ? G.accent : isUserSpeaking ? "#34d399" : `${G.border}cc`;
-      ctx.globalAlpha = 0.9;
-      for (let i = 0; i < bars; i++) {
-        const h = isAiSpeaking
-          ? Math.max(3, (Math.random() * 0.65 + 0.35) * (6 + Math.random() * 22))
-          : audioLevel > 8
-            ? Math.max(3, (Math.random() * 0.5 + 0.5) * (audioLevel / 5.5) + 3)
-            : Math.abs(Math.sin(Date.now() / 500 + i * 0.9)) * 3 + 2;
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        if (ctx.roundRect) ctx.roundRect(i * (bw + 1.5), (canvas.height - h) / 2, bw, h, 2);
-        else ctx.rect(i * (bw + 1.5), (canvas.height - h) / 2, bw, h);
-        ctx.fill();
-      }
-      raf = requestAnimationFrame(draw);
-    };
-    draw();
-    return () => cancelAnimationFrame(raf);
-  }, [isConnected, isAiSpeaking, audioLevel, isUserSpeaking]);
 
   // Called by Quit button — immediate exit
   const handleQuit = async () => {
@@ -423,88 +454,13 @@ export function InterviewScreen({
           </button>
         </div>
 
-        {/* ── BODY 3-COLUMN ───────────────────────────────────────────────── */}
-        <div style={{ flex: 1, display: "grid", gridTemplateColumns: "230px 1fr 250px", overflow: "hidden", minHeight: 0 }}>
-
-          {/* ── LEFT ──────────────────────────────────────────────────────── */}
-          <div style={{
-            background: G.surface, borderRight: `1px solid ${G.border}`,
-            display: "flex", flexDirection: "column", padding: "0.9rem", gap: "0.8rem",
-            overflow: "hidden",
-          }}>
-            {/* Profile */}
-            <div style={{ background: G.surface2, border: `1px solid ${G.border}`, padding: "0.7rem", flexShrink: 0 }}>
-              <div style={{ fontSize: "0.82rem", color: G.text, fontWeight: 600 }}>{config.name || "Candidate"}</div>
-              <div style={{ fontSize: "0.68rem", color: G.muted, marginTop: 2 }}>{config.role}</div>
-              <div style={{ fontFamily: G.mono, fontSize: "0.55rem", color: isConnected ? G.accent : G.accent3, marginTop: 5 }}>
-                {isConnected ? "● Connected" : "○ Disconnected"}
-                {error && <span style={{ color: G.accent3, marginLeft: 6 }}>⚠ {error}</span>}
-              </div>
-            </div>
-
-            {/* Question tracker */}
-            <div style={{ flexShrink: 0 }}>
-              <div style={{ fontFamily: G.mono, fontSize: "0.55rem", color: G.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 }}>
-                Questions
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                {Array.from({ length: config.total_questions }).map((_, i) => {
-                  const qi = i + 1; const done = qi < questionIndex; const cur = qi === questionIndex; const sc = questionScores[i];
-                  return (
-                    <div key={i} style={{
-                      display: "flex", alignItems: "center", gap: 7,
-                      padding: "4px 7px",
-                      background: cur ? `${G.accent2}0e` : "transparent",
-                      border: `1px solid ${cur ? G.accent2 + "44" : G.border}`,
-                      animation: cur && isNewQuestion ? "q-new-flash 2.5s ease" : "none",
-                    }}>
-                      <div style={{
-                        width: 16, height: 16, borderRadius: "50%", flexShrink: 0,
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        background: done ? `${scoreColor(sc ?? 70)}18` : cur ? `${G.accent2}18` : G.surface2,
-                        border: `1px solid ${done ? scoreColor(sc ?? 70) : cur ? G.accent2 : G.border}`,
-                        fontFamily: G.mono, fontSize: "0.5rem",
-                        color: done ? scoreColor(sc ?? 70) : cur ? G.accent2 : G.muted, fontWeight: 700,
-                      }}>
-                        {done ? "✓" : qi}
-                      </div>
-                      <span style={{ fontSize: "0.68rem", color: cur ? G.text : G.muted, fontWeight: cur ? 600 : 400, flex: 1 }}>
-                        Q{qi}
-                      </span>
-                      {sc != null && (
-                        <span style={{ fontFamily: G.mono, fontSize: "0.58rem", color: scoreColor(sc), fontWeight: 700 }}>
-                          {sc}%
-                        </span>
-                      )}
-                      {cur && sc == null && (
-                        <span style={{ fontFamily: G.mono, fontSize: "0.5rem", color: G.accent2 }}>now</span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Transcript */}
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
-              <div style={{ fontFamily: G.mono, fontSize: "0.55rem", color: G.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 5, flexShrink: 0 }}>
-                Your Transcript
-              </div>
-              <div style={{
-                flex: 1, background: G.surface2, border: `1px solid ${G.border}`,
-                padding: "0.7rem", fontSize: "0.74rem", color: G.text,
-                lineHeight: 1.6, overflowY: "auto", minHeight: 0,
-              }}>
-                {userTranscript || <span style={{ color: G.muted }}>Waiting for your voice…</span>}
-                <div ref={transcriptEndRef} />
-              </div>
-            </div>
-          </div>
+        {/* ── BODY 2-COLUMN ───────────────────────────────────────────────── */}
+        <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 220px", overflow: "hidden", minHeight: 0 }}>
 
           {/* ── CENTER ────────────────────────────────────────────────────── */}
           <div style={{
             display: "flex", flexDirection: "column",
-            padding: "1.2rem 2rem 1rem", gap: "1rem",
+            padding: "1.2rem 2.4rem 1rem", gap: "1rem",
             overflow: "hidden",
           }}>
 
@@ -534,15 +490,10 @@ export function InterviewScreen({
               <div
                 key={questionKey}
                 style={{
-                  fontSize: "clamp(1.15rem, 1.9vw, 1.9rem)", fontWeight: 700,
-                  color: G.text, lineHeight: 1.3, letterSpacing: "-0.02em",
-                  maxWidth: 620, margin: "0 auto",
+                  fontSize: "clamp(1.2rem, 2vw, 1.75rem)", fontWeight: 700,
+                  color: G.text, lineHeight: 1.35, letterSpacing: "-0.02em",
+                  maxWidth: 720, margin: "0 auto",
                   animation: "q-enter 0.35s ease",
-                  // Clamp to 4 lines so long questions don't push the orb off screen
-                  display: "-webkit-box",
-                  WebkitLineClamp: 4,
-                  WebkitBoxOrient: "vertical",
-                  overflow: "hidden",
                 }}
               >
                 {question || "Introduce yourself to begin."}
@@ -605,54 +556,24 @@ export function InterviewScreen({
               <StatePill state={speakState} isConnected={isConnected} />
             </div>
 
-            {/* Waveform — compact, clearly labelled */}
-            <div style={{
-              background: G.surface2, border: `1px solid ${G.border}`,
-              padding: "0.5rem 0.8rem", flexShrink: 0,
-            }}>
-              <div style={{
-                display: "flex", justifyContent: "space-between", alignItems: "center",
-                fontFamily: G.mono, fontSize: "0.52rem", color: G.muted,
-                textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 5,
-              }}>
-                <span>Audio</span>
-                <span style={{ color: isAiSpeaking ? G.accent : isUserSpeaking ? "#34d399" : G.muted }}>
-                  {isAiSpeaking ? "AI output" : isUserSpeaking ? "Mic active" : "Silence"}
-                </span>
-              </div>
-              <canvas ref={waveCanvasRef} width={600} height={36} style={{ width: "100%", height: 36, display: "block" }} />
-            </div>
-
-            {/* AI message — bottom of center, key info for user */}
-            <div style={{
+            {/* AI speech card */}
+            <div key={aiMsgKey} style={{
               flex: 1, background: G.surface2, border: `1px solid ${G.border}`,
-              padding: "0.7rem 0.9rem", minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column",
+              minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column",
             }}>
-              <div style={{ fontFamily: G.mono, fontSize: "0.52rem", color: G.muted, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 5, flexShrink: 0 }}>
-                Aria's Message
-              </div>
-              <div style={{
-                fontSize: "0.76rem", color: G.text, lineHeight: 1.55,
-                borderLeft: `2px solid ${G.accent}`, paddingLeft: "0.7rem",
-                flex: 1, overflowY: "auto",
-              }}>
-                {aiMsg || <span style={{ color: G.muted }}>Waiting for Aria…</span>}
-              </div>
+              <AiSpeechCard text={aiMsg} isActive={isAiSpeaking} />
             </div>
           </div>
 
           {/* ── RIGHT ─────────────────────────────────────────────────────── */}
           <div style={{
             background: G.surface, borderLeft: `1px solid ${G.border}`,
-            display: "flex", flexDirection: "column", padding: "0.9rem", gap: "0.8rem",
+            display: "flex", flexDirection: "column", padding: "0.9rem", gap: "0.6rem",
             overflow: "hidden",
           }}>
-            {/* Camera */}
+            {/* Screen share toggle + camera */}
             <div style={{ flexShrink: 0 }}>
-              <div style={{
-                display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6,
-              }}>
-                <div style={{ fontFamily: G.mono, fontSize: "0.52rem", color: G.muted, textTransform: "uppercase", letterSpacing: "0.08em" }}>Vision</div>
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
                 <button onClick={toggleScreenShare} style={{
                   background: isScreenSharing ? G.accent2 : "transparent",
                   border: `1px solid ${isScreenSharing ? G.accent2 : G.border}`,
@@ -691,68 +612,17 @@ export function InterviewScreen({
                   </div>
                 </div>
               </div>
-            </div>
-
-            {/* Confidence */}
-            <div style={{ background: G.surface2, border: `1px solid ${G.border}`, padding: "0.7rem", flexShrink: 0 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                <span style={{ fontFamily: G.mono, fontSize: "0.55rem", color: G.muted, textTransform: "uppercase" }}>Confidence</span>
-                <span style={{ fontSize: "1rem", fontWeight: 800, color: confidence > 65 ? G.accent : G.accent2 }}>{Math.round(confidence)}%</span>
-              </div>
-              <div style={{ height: 5, background: G.bg, borderRadius: 3, overflow: "hidden" }}>
-                <div style={{ height: "100%", width: `${confidence}%`, background: confidence > 65 ? G.accent : G.accent2, transition: "width 0.8s ease" }} />
-              </div>
-              <div style={{ fontSize: "0.62rem", color: G.muted, marginTop: 5, textAlign: "center" }}>
-                {confidence > 75 ? "Excellent composure" : confidence > 50 ? "Steady — keep going" : "Take a breath"}
+              {/* Compact confidence + emotion line */}
+              <div style={{
+                fontFamily: G.mono, fontSize: "0.55rem", color: G.muted,
+                marginTop: 5, textAlign: "center",
+              }}>
+                {Math.round(confidence)}% · {emotion}
               </div>
             </div>
 
-            {/* Stats 2×2 grid */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, flexShrink: 0 }}>
-              <div style={{ background: G.surface2, border: `1px solid ${G.border}`, padding: "0.6rem" }}>
-                <div style={{ fontFamily: G.mono, fontSize: "0.5rem", color: G.muted, textTransform: "uppercase" }}>Fillers</div>
-                <div style={{ fontSize: "1.3rem", fontWeight: 700, color: fillers > 5 ? G.accent3 : G.text, marginTop: 2 }}>{fillers}</div>
-              </div>
-              <div style={{ background: G.surface2, border: `1px solid ${G.border}`, padding: "0.6rem" }}>
-                <div style={{ fontFamily: G.mono, fontSize: "0.5rem", color: G.muted, textTransform: "uppercase" }}>Words</div>
-                <div style={{ fontSize: "1.3rem", fontWeight: 700, color: G.text, marginTop: 2 }}>
-                  {userTranscript.split(/\s+/).filter(Boolean).length}
-                </div>
-              </div>
-              <div style={{ background: G.surface2, border: `1px solid ${G.border}`, padding: "0.6rem" }}>
-                <div style={{ fontFamily: G.mono, fontSize: "0.5rem", color: G.muted, textTransform: "uppercase" }}>You</div>
-                <div style={{ fontSize: "0.9rem", fontWeight: 700, color: "#34d399", marginTop: 2, fontFamily: G.mono }}>
-                  {fmtTime(userSpeakSec)}
-                </div>
-              </div>
-              <div style={{ background: G.surface2, border: `1px solid ${G.border}`, padding: "0.6rem" }}>
-                <div style={{ fontFamily: G.mono, fontSize: "0.5rem", color: G.muted, textTransform: "uppercase" }}>AI</div>
-                <div style={{ fontSize: "0.9rem", fontWeight: 700, color: G.accent, marginTop: 2, fontFamily: G.mono }}>
-                  {fmtTime(aiSpeakSec)}
-                </div>
-              </div>
-            </div>
-
-            {/* Spacer + score summary */}
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", gap: 4 }}>
-              {Object.entries(questionScores).length > 0 && (
-                <div style={{ background: G.surface2, border: `1px solid ${G.border}`, padding: "0.7rem" }}>
-                  <div style={{ fontFamily: G.mono, fontSize: "0.5rem", color: G.muted, textTransform: "uppercase", marginBottom: 6 }}>Scores</div>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {Object.entries(questionScores).map(([qi, sc]) => (
-                      <div key={qi} style={{
-                        fontFamily: G.mono, fontSize: "0.6rem",
-                        color: scoreColor(sc), fontWeight: 700,
-                        background: `${scoreColor(sc)}18`, border: `1px solid ${scoreColor(sc)}44`,
-                        padding: "2px 7px", borderRadius: 3,
-                      }}>
-                        Q{parseInt(qi) + 1}: {sc}%
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
+            {/* Spacer */}
+            <div style={{ flex: 1 }} />
           </div>
         </div>
       </div>

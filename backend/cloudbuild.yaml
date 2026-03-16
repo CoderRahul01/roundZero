@@ -38,7 +38,7 @@ steps:
         ENV_VARS="ENVIRONMENT=production"
         ENV_VARS="$$ENV_VARS,LOG_LEVEL=info"
         ENV_VARS="$$ENV_VARS,GOOGLE_GENAI_USE_VERTEXAI=FALSE"
-        ENV_VARS="$$ENV_VARS,GEMINI_MODEL=gemini-2.5-flash-native-audio-preview-12-2025"
+        ENV_VARS="$$ENV_VARS,GEMINI_MODEL=gemini-2.5-flash-native-audio-latest"
         ENV_VARS="$$ENV_VARS,USE_SUPERMEMORY=true"
         ENV_VARS="$$ENV_VARS,USE_REDIS=true"
         ENV_VARS="$$ENV_VARS,CORS_ALLOW_ORIGINS=https://roundzero-xi.vercel.app"

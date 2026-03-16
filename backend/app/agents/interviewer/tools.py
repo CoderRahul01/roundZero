@@ -120,6 +120,11 @@ async def evaluate_answer(
                     "feedback": evaluation.coaching_note or "",
                     "filler_word_count": 0,
                     "emotion_log": {},
+                    "what_was_right": evaluation.what_was_right or "",
+                    "what_was_wrong": evaluation.what_was_wrong or "",
+                    "correctness_percent": evaluation.correctness_percent,
+                    "topic": topic or "General",
+                    "slang_detected": evaluation.slang_detected,
                 }
                 key = f"session_eval:{session_id}:{question_number}"
                 await asyncio.to_thread(redis.setex, key, 7200, json.dumps(provisional))
@@ -167,6 +172,10 @@ async def record_score(
     feedback: str,
     is_followup: bool = False,
     parent_question_number: Optional[int] = None,
+    what_was_right: str = "",
+    what_was_wrong: str = "",
+    correctness_percent: int = 0,
+    topic: str = "General",
 ) -> str:
     """
     Record the candidate's score for a question or follow-up.
@@ -180,6 +189,24 @@ async def record_score(
 
     session_id = _session_id_ctx.get()
     if session_id:
+        # Belt-and-suspenders: if Aria didn't pass enriched fields, load them from
+        # the provisional evaluate_answer entry that was written to Redis earlier.
+        if not (what_was_right and what_was_wrong and correctness_percent):
+            try:
+                from app.core.redis_client import get_redis
+                redis = get_redis()
+                if redis:
+                    prov_key = f"session_eval:{session_id}:{question_number}"
+                    raw = await asyncio.to_thread(redis.get, prov_key)
+                    if raw:
+                        prov = json.loads(raw)
+                        what_was_right = what_was_right or prov.get("what_was_right", "")
+                        what_was_wrong = what_was_wrong or prov.get("what_was_wrong", "")
+                        correctness_percent = correctness_percent or prov.get("correctness_percent", 0)
+                        topic = topic if topic != "General" else prov.get("topic", "General")
+            except Exception:
+                pass
+
         from app.services.session_service import SessionService
 
         try:
@@ -196,6 +223,10 @@ async def record_score(
                     "filler_word_count": 0,
                     "emotion_log": {},
                     "is_followup": bool(is_followup),
+                    "what_was_right": what_was_right or "",
+                    "what_was_wrong": what_was_wrong or "",
+                    "correctness_percent": int(correctness_percent) if correctness_percent else 0,
+                    "topic": topic or "General",
                 },
             )
         except Exception as exc:

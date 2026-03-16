@@ -17,6 +17,10 @@ export interface QuestionResult {
   score: number;
   fillers: number;
   feedback: string;
+  whatWasRight?: string;
+  whatWasWrong?: string;
+  correctnessPercent?: number;
+  topic?: string;
 }
 
 export interface SessionReport {
@@ -28,4 +32,8 @@ export interface SessionReport {
   breakdown: QuestionResult[];
   strengths: string[];
   weaknesses: string[];
+  scoreTrend?: "improving" | "declining" | "stable";
+  scoreTrendNote?: string;
+  topicsCovered?: string[];
+  scoresByQuestion?: number[];
 }

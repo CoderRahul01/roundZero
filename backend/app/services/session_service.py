@@ -131,7 +131,7 @@ class SessionService:
         try:
             import asyncpg  # type: ignore
 
-            conn = await asyncpg.connect(settings.database_url)
+            conn = await asyncpg.connect(settings.database_url, timeout=10.0)
             try:
                 # Ensure the session row exists before inserting the FK-dependent
                 # question_results row.  We need a minimal user_profiles row too.
@@ -251,7 +251,7 @@ class SessionService:
         try:
             import asyncpg  # type: ignore
 
-            conn = await asyncpg.connect(settings.database_url)
+            conn = await asyncpg.connect(settings.database_url, timeout=10.0)
             try:
                 rows = await conn.fetch(
                     """
@@ -264,6 +264,7 @@ class SessionService:
                     ORDER BY created_at ASC
                     """,
                     session_id,
+                    timeout=5.0,
                 )
                 if rows:
                     logger.info(
@@ -284,7 +285,15 @@ class SessionService:
         if redis:
             try:
                 pattern = f"session_eval:{session_id}:*"
-                keys = await asyncio.to_thread(redis.keys, pattern)
+                # Use SCAN instead of KEYS to avoid O(N) blocking on the Redis server
+                all_keys: list = []
+                cursor = 0
+                while True:
+                    cursor, batch = await asyncio.to_thread(redis.scan, cursor, match=pattern, count=100)
+                    all_keys.extend(batch)
+                    if cursor == 0:
+                        break
+                keys = all_keys
                 if keys:
                     results_by_q: dict = {}
                     for key in keys:
@@ -323,7 +332,7 @@ class SessionService:
         try:
             import asyncpg  # type: ignore
 
-            conn = await asyncpg.connect(settings.database_url)
+            conn = await asyncpg.connect(settings.database_url, timeout=10.0)
             try:
                 user_id = data.get("user_id") or "anonymous"
                 # Ensure the user_profiles FK target exists first
@@ -368,7 +377,7 @@ class SessionService:
         try:
             import asyncpg  # type: ignore
 
-            conn = await asyncpg.connect(settings.database_url)
+            conn = await asyncpg.connect(settings.database_url, timeout=10.0)
             try:
                 await conn.execute(
                     """

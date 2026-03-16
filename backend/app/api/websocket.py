@@ -336,6 +336,10 @@ async def websocket_endpoint(
         # PHASE 3: Bidi-streaming — concurrent upstream / downstream
         # --------------------------------------------------------
 
+        # Shared stop signal: downstream sets it when the Gemini stream ends
+        # so upstream can exit its receive loop cleanly without a closed-queue error.
+        _stop = asyncio.Event()
+
         async def timer_task():
             """Send time updates to frontend and pacing clues to agent."""
             try:
@@ -390,8 +394,11 @@ async def websocket_endpoint(
         async def upstream() -> None:
             """WebSocket client → LiveRequestQueue"""
             try:
-                while True:
-                    raw = await websocket.receive()
+                while not _stop.is_set():
+                    try:
+                        raw = await asyncio.wait_for(websocket.receive(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        continue  # poll _stop and retry
 
                     if "text" in raw:
                         try:
@@ -440,8 +447,7 @@ async def websocket_endpoint(
             except Exception as exc:
                 logger.error(f"Upstream error in session {session_id}: {exc}")
             finally:
-                if queue:
-                    queue.close()
+                _stop.set()  # ensure downstream also exits if upstream dies first
 
         async def downstream() -> None:
             """run_live() events → WebSocket client"""
@@ -519,6 +525,8 @@ async def websocket_endpoint(
                     logger.error(f"Live API error in session {session_id}: {e}")
             except Exception as exc:
                 logger.error(f"Downstream error in session {session_id}: {exc}", exc_info=True)
+            finally:
+                _stop.set()  # signal upstream to stop receiving
 
         # Run both tasks concurrently
         await asyncio.gather(upstream(), downstream(), heartbeat(), timer_task(), return_exceptions=True)

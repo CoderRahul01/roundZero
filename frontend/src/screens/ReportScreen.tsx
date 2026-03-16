@@ -33,6 +33,32 @@ function scoreColor(s: number) {
   return G.accent3;
 }
 
+function ScoreTrendChart({ scores, trend }: { scores: number[]; trend?: string }) {
+  if (!scores || scores.length < 2) return null;
+  const w = 280, h = 64, pad = 20;
+  const color = trend === "improving" ? "#10b981" : trend === "declining" ? "#f43f5e" : G.accent2;
+  const step = (w - 2 * pad) / (scores.length - 1);
+  const points = scores.map((s, i) => ({
+    x: pad + i * step,
+    y: h - pad - (s / 10) * (h - 2 * pad),
+  }));
+  const polyline = points.map(p => `${p.x},${p.y}`).join(" ");
+  return (
+    <svg width={w} height={h} style={{ display: "block" }}>
+      <polyline points={polyline} fill="none" stroke={`${color}40`} strokeWidth={2} />
+      {points.map((p, i) => (
+        <circle key={i} cx={p.x} cy={p.y} r={4} fill={color} />
+      ))}
+      {points.map((p, i) => (
+        <text key={i} x={p.x} y={h - 2} textAnchor="middle"
+          fontSize={9} fill={G.muted} fontFamily={G.mono}>
+          Q{i + 1}
+        </text>
+      ))}
+    </svg>
+  );
+}
+
 export function ReportScreen({
   sessionId,
   onRestart,
@@ -131,6 +157,27 @@ export function ReportScreen({
           ))}
         </div>
 
+        {/* ── Score Trajectory ── */}
+        {report.scoresByQuestion && report.scoresByQuestion.length > 1 && (
+          <div style={{
+            background: G.surface, border: `1px solid ${G.border}`,
+            padding: "1.2rem 1.5rem", marginBottom: "2rem",
+            display: "flex", alignItems: "center", gap: "2rem", flexWrap: "wrap",
+          }}>
+            <div>
+              <div style={{ fontFamily: G.mono, fontSize: "0.55rem", color: G.muted, textTransform: "uppercase", letterSpacing: "0.18em", marginBottom: "0.5rem" }}>
+                Score Trajectory
+              </div>
+              <ScoreTrendChart scores={report.scoresByQuestion} trend={report.scoreTrend} />
+            </div>
+            {report.scoreTrendNote && (
+              <p style={{ fontSize: "0.82rem", color: G.muted, flex: 1, minWidth: 180, margin: 0, lineHeight: 1.6 }}>
+                {report.scoreTrendNote}
+              </p>
+            )}
+          </div>
+        )}
+
         {/* ── Coach's summary ── */}
         <div style={{
           background: G.surface, border: `1px solid ${G.border}`,
@@ -192,12 +239,28 @@ export function ReportScreen({
                     <div style={{ position: "absolute", bottom: 0, left: 0, height: 3, width: `${sc}%`, background: col }} />
 
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "1rem", marginBottom: "0.8rem" }}>
-                      <div style={{ display: "flex", gap: "0.6rem", alignItems: "center" }}>
+                      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
                         <span style={{
                           fontFamily: G.mono, fontSize: "0.55rem", color: G.muted,
                           background: G.surface2, border: `1px solid ${G.border}`,
                           padding: "2px 7px", letterSpacing: "0.1em", textTransform: "uppercase", flexShrink: 0,
                         }}>Q{idx + 1}</span>
+                        {item.topic && (
+                          <span style={{
+                            fontFamily: G.mono, fontSize: "0.52rem", color: "#818cf8",
+                            background: "rgba(129,140,248,0.1)", border: "1px solid rgba(129,140,248,0.25)",
+                            padding: "2px 8px", letterSpacing: "0.08em", textTransform: "uppercase", flexShrink: 0,
+                          }}>{item.topic}</span>
+                        )}
+                        {item.correctnessPercent !== undefined && item.correctnessPercent > 0 && (
+                          <span style={{
+                            fontFamily: G.mono, fontSize: "0.52rem",
+                            color: scoreColor(item.correctnessPercent),
+                            background: `${scoreColor(item.correctnessPercent)}14`,
+                            border: `1px solid ${scoreColor(item.correctnessPercent)}30`,
+                            padding: "2px 8px", letterSpacing: "0.08em", flexShrink: 0,
+                          }}>{item.correctnessPercent}% correct</span>
+                        )}
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexShrink: 0 }}>
                         <ScoreRing value={sc} color={col} size={44} />
@@ -216,6 +279,31 @@ export function ReportScreen({
                     }}>
                       {item.feedback}
                     </div>
+
+                    {(item.whatWasRight || item.whatWasWrong) && (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.6rem", marginTop: "0.8rem" }}>
+                        {item.whatWasRight && (
+                          <div style={{
+                            fontSize: "0.78rem", color: "#10b981", lineHeight: 1.55,
+                            background: "rgba(16,185,129,0.05)", border: "1px solid rgba(16,185,129,0.15)",
+                            padding: "0.5rem 0.7rem",
+                          }}>
+                            <span style={{ fontFamily: G.mono, fontSize: "0.5rem", letterSpacing: "0.1em", display: "block", marginBottom: "0.3rem", opacity: 0.7 }}>WHAT WORKED</span>
+                            {item.whatWasRight}
+                          </div>
+                        )}
+                        {item.whatWasWrong && (
+                          <div style={{
+                            fontSize: "0.78rem", color: "#f59e0b", lineHeight: 1.55,
+                            background: "rgba(245,158,11,0.05)", border: "1px solid rgba(245,158,11,0.15)",
+                            padding: "0.5rem 0.7rem",
+                          }}>
+                            <span style={{ fontFamily: G.mono, fontSize: "0.5rem", letterSpacing: "0.1em", display: "block", marginBottom: "0.3rem", opacity: 0.7 }}>WHAT TO FIX</span>
+                            {item.whatWasWrong}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}

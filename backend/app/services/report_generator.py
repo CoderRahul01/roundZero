@@ -1,5 +1,7 @@
+import asyncio
 import logging
-from typing import Dict, Any, List
+from typing import Any, Dict, List
+
 from app.services.session_service import SessionService
 from app.services.supermemory_service import SupermemoryService
 from app.core.settings import get_settings
@@ -7,6 +9,7 @@ from google import genai
 from google.genai import types
 
 logger = logging.getLogger(__name__)
+
 
 class ReportGenerator:
     """Service to compile session results into a polished candidate report."""
@@ -30,6 +33,10 @@ class ReportGenerator:
                 "confidenceAvg": 0,
                 "totalFillers": 0,
                 "questionsAnswered": 0,
+                "scoreTrend": "stable",
+                "scoreTrendNote": "",
+                "topicsCovered": [],
+                "scoresByQuestion": [],
                 "breakdown": [],
                 "strengths": ["Complete at least one question to receive a strength analysis."],
                 "weaknesses": ["Complete at least one question to receive improvement suggestions."],
@@ -40,7 +47,6 @@ class ReportGenerator:
             }
 
         # Deduplicate by question_number — keep the last entry per question
-        # (record_score may write after the provisional evaluate_answer entry)
         deduped: dict = {}
         for r in results:
             qnum = r.get("question_number") or 0
@@ -52,15 +58,38 @@ class ReportGenerator:
         total_fillers = sum(r.get("filler_word_count", 0) for r in results)
         overall_score_pct = min(100, avg_score * 10)
 
+        # Compute score trend across questions
+        scores_by_q = [int(r.get("score") or 0) for r in results]
+        score_trend = "stable"
+        if len(scores_by_q) >= 3:
+            half = len(scores_by_q) // 2
+            first_half_avg = sum(scores_by_q[:half]) / half
+            second_half_avg = sum(scores_by_q[half:]) / (len(scores_by_q) - half)
+            if second_half_avg > first_half_avg + 0.5:
+                score_trend = "improving"
+            elif second_half_avg < first_half_avg - 0.5:
+                score_trend = "declining"
+
+        # Unique topics in order of appearance
+        topics_covered = list(dict.fromkeys(
+            r.get("topic") or "General" for r in results
+        ))
+
         # Build a readable breakdown for the prompt
         q_lines = []
         for r in results:
             qnum = r.get("question_number", "?")
             score = r.get("score", 0)
+            topic = r.get("topic") or "General"
             q_text = (r.get("question_text") or "")[:120]
             feedback = (r.get("feedback") or r.get("user_answer") or "No feedback recorded.")[:200]
+            what_right = (r.get("what_was_right") or "")[:100]
+            what_wrong = (r.get("what_was_wrong") or "")[:100]
+            correctness = r.get("correctness_percent", 0)
             q_lines.append(
-                f"Q{qnum} ({score}/10): \"{q_text}\"\n  Feedback: {feedback}"
+                f"Q{qnum} ({score}/10) [{topic}] {correctness}% correct: \"{q_text}\"\n"
+                f"  Right: {what_right or 'N/A'} | Wrong: {what_wrong or 'N/A'}\n"
+                f"  Feedback: {feedback}"
             )
         breakdown_text = "\n".join(q_lines)
 
@@ -80,6 +109,8 @@ CANDIDATE PROFILE:
 - Questions Answered: {len(results)} of {session_data.get('total_questions', 5)}
 - Overall Score: {overall_score_pct}/100
 - Filler Words Used: {total_fillers}
+- Score Trend: {score_trend} (Q1 → Q{len(results)})
+- Topics Covered: {', '.join(topics_covered)}
 {partial_note}
 
 QUESTION-BY-QUESTION RESULTS:
@@ -89,13 +120,15 @@ Write a JSON object with exactly these fields:
 {{
   "summary": "<2-3 sentences that are honest and specific — name the candidate's strongest moment and their biggest gap. Avoid generic praise.>",
   "strengths": ["<strength 1 — cite a specific question or answer pattern>", "<strength 2 — specific and actionable praise>"],
-  "weaknesses": ["<weakness 1 — specific gap with a clear action: e.g. 'Practice X by doing Y'>", "<weakness 2 — specific and actionable>"]
+  "weaknesses": ["<weakness 1 — specific gap with a clear action: e.g. 'Practice X by doing Y'>", "<weakness 2 — specific and actionable>"],
+  "score_trend_note": "<one sentence about the performance trajectory, e.g. 'Performance improved steadily across the interview' or 'Started strong but declined on later technical questions'>"
 }}
 
 Rules:
 - summary must be 2-3 sentences, no bullet points
 - Each strength/weakness must be one clear sentence, maximum 20 words
 - Strengths and weaknesses must be grounded in the actual answers above, not generic
+- score_trend_note must be exactly one sentence
 - If only 1-2 questions were answered, acknowledge it naturally in the summary
 """
 
@@ -105,6 +138,7 @@ Rules:
         )
         strengths = ["Engagement with the interview process"]
         weaknesses = ["Complete more questions for a fuller strength/weakness analysis"]
+        score_trend_note = ""
 
         try:
             settings = get_settings()
@@ -114,24 +148,27 @@ Rules:
                 summary: str
                 strengths: List[str]
                 weaknesses: List[str]
+                score_trend_note: str = ""
 
-            import asyncio
-            response = await asyncio.to_thread(
-                client.models.generate_content,
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=ReportOutput,
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.models.generate_content,
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=ReportOutput,
+                    ),
                 ),
+                timeout=30.0,
             )
             report_ai = response.parsed
             if report_ai and report_ai.summary:
                 summary_text = report_ai.summary
                 strengths = report_ai.strengths or strengths
                 weaknesses = report_ai.weaknesses or weaknesses
+                score_trend_note = report_ai.score_trend_note or ""
             elif response.text:
-                # Fallback: parse text if structured output failed
                 import json as _json
                 raw = response.text.strip()
                 if raw.startswith("```"):
@@ -143,6 +180,7 @@ Rules:
                     summary_text = parsed["summary"]
                     strengths = parsed.get("strengths") or strengths
                     weaknesses = parsed.get("weaknesses") or weaknesses
+                    score_trend_note = parsed.get("score_trend_note") or ""
         except Exception as e:
             logger.error(f"Failed to generate AI report: {type(e).__name__}: {e}", exc_info=True)
 
@@ -163,12 +201,20 @@ Rules:
             "totalFillers": total_fillers,
             "questionsAnswered": len(results),
             "summary": summary_text,
+            "scoreTrend": score_trend,
+            "scoreTrendNote": score_trend_note,
+            "topicsCovered": topics_covered,
+            "scoresByQuestion": scores_by_q,
             "breakdown": [
                 {
                     "q": r.get("question_text") or "Question not recorded",
                     "score": min(100, int(r.get("score") or 0) * 10),
                     "feedback": r.get("feedback") or r.get("user_answer") or "No feedback available.",
                     "fillers": r.get("filler_word_count", 0),
+                    "whatWasRight": r.get("what_was_right") or "",
+                    "whatWasWrong": r.get("what_was_wrong") or "",
+                    "correctnessPercent": int(r.get("correctness_percent") or 0),
+                    "topic": r.get("topic") or "General",
                 }
                 for r in results
             ],

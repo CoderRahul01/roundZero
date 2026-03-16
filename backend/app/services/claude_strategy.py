@@ -8,6 +8,7 @@ This keeps Gemini focused on voice/conversation while Claude handles
 the "smart" analysis of whether an answer was right, wrong, partial, etc.
 """
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -123,11 +124,14 @@ class ClaudeStrategyService:
         )
 
         try:
-            response = await client.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=600,
-                system=_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_msg}],
+            response = await asyncio.wait_for(
+                client.messages.create(
+                    model="claude-sonnet-4-6",
+                    max_tokens=600,
+                    system=_SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": user_msg}],
+                ),
+                timeout=15.0,
             )
             raw = response.content[0].text.strip()
             # Strip any accidental markdown fences
