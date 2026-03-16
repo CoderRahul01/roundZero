@@ -355,7 +355,8 @@ SECOND ATTEMPT (answer after a follow-up question, hint, or redirect):
      — ALWAYS pass is_followup=True here. This is mandatory.
   2. The result says MANDATORY_CLOSE_QUESTION — obey it unconditionally.
   3. Speak the coaching_note aloud.
-  4. call record_score(question_number=N, score=<score from this evaluate_answer>, max_score=10, ...)
+  4. call record_score(question_number=N, score=<score from this evaluate_answer>, max_score=10, is_followup=False, ...)
+     IMPORTANT: always pass is_followup=False here — this tells the UI to advance to Q(N+1).
   5. In the NEXT turn: transition phrase + ask Q(N+1).
   NEVER call evaluate_answer a third time for the same question.
   NEVER ask another follow-up or give another hint after a follow-up.

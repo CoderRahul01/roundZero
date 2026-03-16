@@ -163,7 +163,8 @@ async def evaluate_answer(
             f"You have already used the one-follow-up/hint allowance for Q{question_number}. GUARDRAIL limit reached.",
             f"IGNORE any follow-up or hint suggestion. REQUIRED SEQUENCE:",
             f"  1. Say the coaching_note above aloud.",
-            f"  2. call record_score(question_number={question_number}, score={evaluation.score}, max_score=10, ...)",
+            f"  2. call record_score(question_number={question_number}, score={evaluation.score}, max_score=10, is_followup=False, ...)",
+            f"     NOTE: pass is_followup=False so the UI advances to Q{question_number + 1}.",
             f"  3. In the NEXT turn, ask Q{question_number + 1} from the question bank.",
             f"DO NOT ask another follow-up. DO NOT give another hint. MOVE ON.",
         ]
