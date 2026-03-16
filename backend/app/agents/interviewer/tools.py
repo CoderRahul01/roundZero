@@ -59,6 +59,7 @@ async def evaluate_answer(
     ideal_answer: str = "",
     topic: str = "General",
     difficulty: str = "Medium",
+    is_followup: bool = False,
 ) -> str:
     """
     CALL THIS IMMEDIATELY after the candidate finishes answering any question or follow-up.
@@ -67,6 +68,12 @@ async def evaluate_answer(
     Pass ideal_answer when available (from the question bank) — it enables
     Gemini embedding-based semantic alignment scoring for a richer, more accurate
     score that blends qualitative (Claude) with quantitative (Gemini) signals.
+
+    is_followup: Set to True when this is a second evaluate_answer call on the SAME
+        question (after a follow-up question was asked or a hint was given).
+        When True, the result returns MANDATORY_CLOSE_QUESTION — you MUST call
+        record_score and move to Q(N+1) regardless of answer quality. This enforces
+        the one-follow-up-per-question rule and prevents infinite loops.
 
     Returns a structured coaching brief with:
     - Whether the answer was correct / partial / wrong / "don't know"
@@ -77,11 +84,12 @@ async def evaluate_answer(
     - A score 1-10 with explanation (blends Claude quality + semantic similarity)
 
     You MUST act on the next_action field:
-    - NEXT_QUESTION          → record_score then ask the next question from the bank
-    - FOLLOW_UP              → ask the follow_up_question provided
-    - CORRECT_AND_FOLLOW_UP  → say the coaching_note (which corrects them), then ask the follow_up_question
-    - GIVE_HINT              → say the hint naturally, then wait for their next attempt
-    - REDIRECT_THEN_CONTINUE → gently redirect to the question, accept any answer, then move on
+    - NEXT_QUESTION             → record_score then ask the next question from the bank
+    - FOLLOW_UP                 → ask the follow_up_question provided (first attempt only)
+    - CORRECT_AND_FOLLOW_UP     → say the coaching_note, then ask the follow_up_question
+    - GIVE_HINT                 → say the hint naturally, then wait for their next attempt
+    - REDIRECT_THEN_CONTINUE    → redirect to question, accept any answer, evaluate with is_followup=True
+    - MANDATORY_CLOSE_QUESTION  → returned when is_followup=True; call record_score immediately and move on
     """
     from app.services.claude_strategy import ClaudeStrategyService
 
@@ -141,20 +149,50 @@ async def evaluate_answer(
         f"WHAT WAS RIGHT : {evaluation.what_was_right or 'N/A'}",
         f"WHAT WAS WRONG : {evaluation.what_was_wrong or 'N/A'}",
         "",
-        f"=== YOUR NEXT ACTION: {evaluation.next_action} ===",
-        f"SAY THIS ALOUD : {evaluation.coaching_note}",
     ]
 
-    if evaluation.next_action in ("FOLLOW_UP", "CORRECT_AND_FOLLOW_UP"):
-        brief_lines.append(f"THEN ASK THIS  : {evaluation.follow_up_question}")
-        brief_lines.append(f"AFTER THEY ANSWER: call record_score(question_number={question_number}, score={evaluation.score}, max_score=10, ...) then move to Q{question_number + 1}.")
-    elif evaluation.next_action == "GIVE_HINT":
-        brief_lines.append(f"HINT TO GIVE   : {evaluation.hint}")
-        brief_lines.append(f"AFTER HINT ATTEMPT: call record_score(question_number={question_number}, score={evaluation.score}, max_score=10, ...) then move to Q{question_number + 1}.")
-    elif evaluation.next_action == "NEXT_QUESTION":
-        brief_lines.append(
-            f"THEN           : call record_score(question_number={question_number}, score={evaluation.score}, max_score=10, ...) then ask Q{question_number + 1} from the bank."
-        )
+    if is_followup:
+        # Hard override: this is the second evaluation on this question.
+        # Regardless of what Claude recommends, the follow-up/hint allowance is spent.
+        # Force Aria to close the question immediately.
+        brief_lines += [
+            f"=== YOUR NEXT ACTION: MANDATORY_CLOSE_QUESTION ===",
+            f"SAY THIS ALOUD : {evaluation.coaching_note}",
+            f"",
+            f"*** FOLLOW-UP/HINT ANSWER RECEIVED — QUESTION CYCLE CLOSES NOW ***",
+            f"You have already used the one-follow-up/hint allowance for Q{question_number}. GUARDRAIL limit reached.",
+            f"IGNORE any follow-up or hint suggestion. REQUIRED SEQUENCE:",
+            f"  1. Say the coaching_note above aloud.",
+            f"  2. call record_score(question_number={question_number}, score={evaluation.score}, max_score=10, ...)",
+            f"  3. In the NEXT turn, ask Q{question_number + 1} from the question bank.",
+            f"DO NOT ask another follow-up. DO NOT give another hint. MOVE ON.",
+        ]
+    else:
+        brief_lines += [
+            f"=== YOUR NEXT ACTION: {evaluation.next_action} ===",
+            f"SAY THIS ALOUD : {evaluation.coaching_note}",
+        ]
+
+        if evaluation.next_action in ("FOLLOW_UP", "CORRECT_AND_FOLLOW_UP"):
+            brief_lines.append(f"THEN ASK THIS  : {evaluation.follow_up_question}")
+            brief_lines.append(
+                f"AFTER THEY ANSWER: call evaluate_answer(question_number={question_number}, question_text=..., "
+                f"candidate_answer=..., ideal_answer=..., topic=..., difficulty=..., is_followup=True) "
+                f"— then record_score(question_number={question_number}, score=<new score>, max_score=10, ...) "
+                f"then move to Q{question_number + 1}."
+            )
+        elif evaluation.next_action == "GIVE_HINT":
+            brief_lines.append(f"HINT TO GIVE   : {evaluation.hint}")
+            brief_lines.append(
+                f"AFTER HINT ATTEMPT: call evaluate_answer(question_number={question_number}, question_text=..., "
+                f"candidate_answer=..., ideal_answer=..., topic=..., difficulty=..., is_followup=True) "
+                f"— then record_score(question_number={question_number}, score=<new score>, max_score=10, ...) "
+                f"then move to Q{question_number + 1}."
+            )
+        elif evaluation.next_action == "NEXT_QUESTION":
+            brief_lines.append(
+                f"THEN           : call record_score(question_number={question_number}, score={evaluation.score}, max_score=10, ...) then ask Q{question_number + 1} from the bank."
+            )
 
     return "\n".join(brief_lines)
 

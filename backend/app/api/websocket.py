@@ -319,14 +319,16 @@ async def websocket_endpoint(
         # 2f. Fresh LiveRequestQueue per connection (never reused)
         queue = LiveRequestQueue()
 
-        # Trigger the first greeting/question automatically so the candidate doesn't have to speak first
-        first_q = session_data.get("questions", [{}])[0].get("question", "Could you please introduce yourself?")
+        # Trigger the first greeting automatically so the candidate doesn't have to speak first.
+        # Keep this message minimal — Aria's system prompt already contains the full OPENING
+        # instructions and question bank. A noisy kickoff message causes her to skip name/role
+        # collection and jump straight to Q1 mid-greeting.
         queue.send_content(
             genai_types.Content(
                 role="user",
                 parts=[
                     genai_types.Part(
-                        text=f"The session is starting. You are RoundZero. Start with a formal, professional greeting and introduction in the REQUIRED JSON FORMAT (NEW_QUESTION #1). Then, transition into the first interview question: {first_q}"
+                        text="The session is starting. Begin the interview now."
                     )
                 ],
             )
@@ -346,7 +348,7 @@ async def websocket_endpoint(
                 state = adk_session.state
                 start_time = state.get("start_time", time.time())
 
-                while not state.get("ended", False):
+                while not state.get("ended", False) and not _stop.is_set():
                     elapsed = time.time() - start_time
                     remaining = INTERVIEW_DURATION_SECONDS - elapsed
 
