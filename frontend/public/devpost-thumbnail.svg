@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" width="1200" height="800">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&amp;display=swap');
+      .logo-text { font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 130px; letter-spacing: -3px; }
+      .tagline { font-family: 'Outfit', sans-serif; font-weight: 400; font-size: 32px; letter-spacing: 2px; }
+      .badge-text { font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 16px; letter-spacing: 1.5px; }
+    </style>
+    <!-- Background Gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0a0a12" />
+      <stop offset="100%" stop-color="#050508" />
+    </linearGradient>
+
+    <!-- Emerald Glow -->
+    <radialGradient id="emeraldGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#6ee7b7" stop-opacity="0.15" />
+      <stop offset="100%" stop-color="#6ee7b7" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="800" fill="url(#bgGrad)" />
+  <circle cx="600" cy="400" r="600" fill="url(#emeraldGlow)" />
+
+  <!-- Audio Waveform Decoration (Bottom) -->
+  <g fill="#6ee7b7" opacity="0.15">
+    <rect x="300" y="650" width="20" height="40" rx="10" />
+    <rect x="330" y="620" width="20" height="70" rx="10" />
+    <rect x="360" y="660" width="20" height="30" rx="10" />
+    <rect x="390" y="580" width="20" height="110" rx="10" />
+    <rect x="420" y="530" width="20" height="160" rx="10" />
+    <rect x="450" y="600" width="20" height="90" rx="10" />
+    <rect x="480" y="640" width="20" height="50" rx="10" />
+    <rect x="510" y="550" width="20" height="140" rx="10" />
+    <rect x="540" y="670" width="20" height="20" rx="10" />
+    <rect x="570" y="610" width="20" height="80" rx="10" />
+    
+    <rect x="610" y="610" width="20" height="80" rx="10" />
+    <rect x="640" y="670" width="20" height="20" rx="10" />
+    <rect x="670" y="550" width="20" height="140" rx="10" />
+    <rect x="700" y="640" width="20" height="50" rx="10" />
+    <rect x="730" y="600" width="20" height="90" rx="10" />
+    <rect x="760" y="530" width="20" height="160" rx="10" />
+    <rect x="790" y="580" width="20" height="110" rx="10" />
+    <rect x="820" y="660" width="20" height="30" rx="10" />
+    <rect x="850" y="620" width="20" height="70" rx="10" />
+    <rect x="880" y="650" width="20" height="40" rx="10" />
+  </g>
+
+  <!-- Wordmark -->
+  <text x="600" y="420" class="logo-text" fill="#e8e8f0" text-anchor="middle">
+    round<tspan fill="#6ee7b7">Zero</tspan>
+  </text>
+
+  <!-- Tagline -->
+  <text x="600" y="490" class="tagline" fill="#5a5a78" text-anchor="middle">
+    AI Interview Coach · Powered by Gemini Live
+  </text>
+
+  <!-- Bottom-right Badge -->
+  <g transform="translate(820, 720)">
+    <rect x="0" y="0" width="340" height="46" rx="23" fill="#f59e0b" opacity="0.1" />
+    <rect x="0" y="0" width="340" height="46" rx="23" fill="none" stroke="#f59e0b" stroke-width="2" opacity="0.4" />
+    <text x="170" y="28" class="badge-text" fill="#f59e0b" text-anchor="middle">
+      GEMINI LIVE AGENT CHALLENGE
+    </text>
+  </g>
+
+</svg>
