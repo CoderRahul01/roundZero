@@ -208,15 +208,16 @@ async def record_score(
             "in websocket.py before starting the ADK session."
         )
 
-    # Notify the frontend that a new question is starting so the question
-    # text panel updates immediately without waiting for Aria's next speech.
+    # Notify the frontend that a new question is starting.
+    # Only fires for main questions (not follow-ups) so the progress bar
+    # doesn't jump forward mid-question when a follow-up is scored.
     ws = _websocket_ctx.get()
-    if ws and session_id:
+    if ws and session_id and not is_followup:
         try:
             from app.services.session_service import SessionService
             session_data = await SessionService.get_session(session_id)
             questions = session_data.get("questions", [])
-            next_idx = question_number  # question_number is 1-indexed; next question is at index question_number
+            next_idx = question_number  # 1-indexed → next is at index question_number
             if next_idx < len(questions):
                 next_q = questions[next_idx]
                 await ws.send_json({

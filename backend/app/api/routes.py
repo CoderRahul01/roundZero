@@ -135,7 +135,7 @@ async def start_session(payload: StartSessionPayload, request: Request):
         stream_api_key=None
     )
 
-@router.post("/session/{session_id}/end")
+@router.post("/session/{session_id}/end", dependencies=[Depends(api_limiter)])
 async def end_session(session_id: str):
     """
     Finalizes an interview session and triggers report generation.
@@ -147,7 +147,7 @@ async def end_session(session_id: str):
     try:
         await ReportGenerator.generate_report(session_id)
     except Exception as e:
-        logger.error(f"Falled to pre-generate report: {e}")
+        logger.error(f"Failed to pre-generate report: {e}")
 
     # Audit log: Session Ended
     # We retrieve the session again to get the user_id since it's not in the path
@@ -161,7 +161,7 @@ async def end_session(session_id: str):
         
     return {"session_id": session_id, "status": "ended"}
 
-@router.get("/session/{session_id}/report")
+@router.get("/session/{session_id}/report", dependencies=[Depends(api_limiter)])
 async def get_report(session_id: str):
     """
     Fetches the compiled report for a completed session.

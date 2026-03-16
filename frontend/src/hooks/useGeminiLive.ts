@@ -96,6 +96,9 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
   const [error, setError] = useState<string | null>(null);
   // Use a ref (not state) for retry counting — state causes stale closures in onclose handlers
   const retryCountRef = useRef(0);
+  // Set to true when stopSession() is called intentionally (quit / interview_end).
+  // Prevents the onclose retry logic from reconnecting after a deliberate stop.
+  const intentionalStopRef = useRef(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   // mic capture context — MUST be 16kHz (ADK/Gemini input requirement)
@@ -453,7 +456,7 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
       
       // Retry logic using ref (not state) to avoid stale closure infinite loop
       const MAX_RETRIES = 2;
-      if (event.code !== 1000 && retryCountRef.current < MAX_RETRIES) {
+      if (!intentionalStopRef.current && event.code !== 1000 && retryCountRef.current < MAX_RETRIES) {
         retryCountRef.current += 1;
         console.log(`WebSocket closed (code ${event.code}). Retrying (${retryCountRef.current}/${MAX_RETRIES}) in 3s...`);
         setTimeout(() => {
@@ -467,7 +470,8 @@ export function useGeminiLive(options: GeminiLiveOptions): UseGeminiLiveReturn {
   }, [baseUrl, mode, sessionId, userId, token, initAudio, onTranscript, onAiTranscript, onEmotion, onInterrupt, onComplete, onAgentEvent, onError, onScreenShareRequest, onScreenShareStop, playNextChunk, initVideo, videoSource]);
 
   const stopSession = useCallback(() => {
-    wsRef.current?.close();
+    intentionalStopRef.current = true;
+    wsRef.current?.close(1000, 'Interview ended');
     workletNodeRef.current?.disconnect();
 
     if (levelIntervalRef.current) {
