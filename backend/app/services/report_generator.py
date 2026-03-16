@@ -115,8 +115,10 @@ Rules:
                 strengths: List[str]
                 weaknesses: List[str]
 
-            response = client.models.generate_content(
-                model="gemini-2.0-flash-001",
+            import asyncio
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model="gemini-2.5-flash",
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -128,8 +130,21 @@ Rules:
                 summary_text = report_ai.summary
                 strengths = report_ai.strengths or strengths
                 weaknesses = report_ai.weaknesses or weaknesses
+            elif response.text:
+                # Fallback: parse text if structured output failed
+                import json as _json
+                raw = response.text.strip()
+                if raw.startswith("```"):
+                    raw = raw.split("```")[1]
+                    if raw.startswith("json"):
+                        raw = raw[4:]
+                parsed = _json.loads(raw)
+                if parsed.get("summary"):
+                    summary_text = parsed["summary"]
+                    strengths = parsed.get("strengths") or strengths
+                    weaknesses = parsed.get("weaknesses") or weaknesses
         except Exception as e:
-            logger.error(f"Failed to generate structured AI report: {e}")
+            logger.error(f"Failed to generate AI report: {type(e).__name__}: {e}", exc_info=True)
 
         # Save to Supermemory for cross-session learning
         if user_id:

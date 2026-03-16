@@ -142,11 +142,13 @@ async def evaluate_answer(
 
     if evaluation.next_action in ("FOLLOW_UP", "CORRECT_AND_FOLLOW_UP"):
         brief_lines.append(f"THEN ASK THIS  : {evaluation.follow_up_question}")
+        brief_lines.append(f"AFTER THEY ANSWER: call record_score(question_number={question_number}, score={evaluation.score}, max_score=10, ...) then move to Q{question_number + 1}.")
     elif evaluation.next_action == "GIVE_HINT":
         brief_lines.append(f"HINT TO GIVE   : {evaluation.hint}")
+        brief_lines.append(f"AFTER HINT ATTEMPT: call record_score(question_number={question_number}, score={evaluation.score}, max_score=10, ...) then move to Q{question_number + 1}.")
     elif evaluation.next_action == "NEXT_QUESTION":
         brief_lines.append(
-            "THEN           : call record_score, then move to the next question in the bank."
+            f"THEN           : call record_score(question_number={question_number}, score={evaluation.score}, max_score=10, ...) then ask Q{question_number + 1} from the bank."
         )
 
     return "\n".join(brief_lines)

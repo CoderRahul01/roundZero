@@ -125,6 +125,9 @@ export function InterviewScreen({
   const screenFrameIntervalRef = useRef<number | null>(null);
   const waveCanvasRef          = useRef<HTMLCanvasElement>(null);
   const isScreenSharingRef     = useRef(false);
+  // Only send screen frames to AI after request_screen_share tool fires.
+  // Prevents arbitrary desktop content from being processed as an answer.
+  const screenAIEnabledRef     = useRef(false);
   const toggleScreenShareRef   = useRef<() => Promise<void>>(() => Promise.resolve());
   const transcriptEndRef       = useRef<HTMLDivElement>(null);
 
@@ -171,8 +174,16 @@ export function InterviewScreen({
     onComplete: (data) => {
       if (data.is_finished || data.type === "interview_end") handleInterviewComplete();
     },
-    onScreenShareRequest: () => { if (!isScreenSharingRef.current) toggleScreenShareRef.current(); },
-    onScreenShareStop:    () => { if (isScreenSharingRef.current)  toggleScreenShareRef.current(); },
+    onScreenShareRequest: () => {
+      screenAIEnabledRef.current = true;
+      if (!isScreenSharingRef.current) toggleScreenShareRef.current();
+      // Tell AI the screen is now being shared for context
+      sendMessage({ type: "text", content: "[Candidate is now sharing their screen. You can see their code editor.]" });
+    },
+    onScreenShareStop: () => {
+      screenAIEnabledRef.current = false;
+      if (isScreenSharingRef.current) toggleScreenShareRef.current();
+    },
     onAgentEvent: (data) => {
       // Backend sends question_change when record_score is called — update panel immediately
       if (data.type === "question_change") {
@@ -277,7 +288,9 @@ export function InterviewScreen({
         const ctx = canvas.getContext("2d");
         const videoEl = screenVideoRef.current;
         screenFrameIntervalRef.current = window.setInterval(() => {
-          if (ctx && videoEl && videoEl.readyState >= 2) {
+          // Only send frames to AI after request_screen_share tool fires.
+          // This prevents the AI from processing the desktop as an answer unprompted.
+          if (ctx && videoEl && videoEl.readyState >= 2 && screenAIEnabledRef.current) {
             ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
             sendMessage({ type: "screen_frame", data: canvas.toDataURL("image/jpeg", 0.6).split(",")[1], mimeType: "image/jpeg" });
           }
